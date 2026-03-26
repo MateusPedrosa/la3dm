@@ -312,24 +312,38 @@ namespace la3dm {
         int idx = 0;
         for (auto it = sampled_hits.begin(); it != sampled_hits.end(); ++it) {
             point3f p(it->x, it->y, it->z);
-            if (max_range > 0) {
-                double l = (p - origin).norm();
-                if (l > max_range)
-                    continue;
-            }
+            // if (max_range > 0) {
+            //     double l = (p - origin).norm();
+            //     if (l > max_range)
+            //         continue;
+            // }
+
             // point6f p6f(p);
             // xy.emplace_back(p6f, 1.0f);
             // ray_idx.push_back(-1);
 
-            float l = (float) sqrt((p.x() - origin.x()) * (p.x() - origin.x()) + (p.y() - origin.y()) * (p.y() - origin.y()) + (p.z() - origin.z()) * (p.z() - origin.z()));
+            float true_dist = (float) sqrt((p.x() - origin.x()) * (p.x() - origin.x()) +
+                                   (p.y() - origin.y()) * (p.y() - origin.y()) +
+                                   (p.z() - origin.z()) * (p.z() - origin.z()));
 
-            float nx = (p.x() - origin.x()) / l;
-            float ny = (p.y() - origin.y()) / l;
-            float nz = (p.z() - origin.z()) / l;
+            bool is_sentinel = false;
+            float l = true_dist;
+            
+            if (max_range > 0 && true_dist >= max_range) {
+                is_sentinel = true;
+                l = max_range; // Clamp the ray length so it doesn't clear space to infinity
+            }
+
+            float nx = (p.x() - origin.x()) / true_dist;
+            float ny = (p.y() - origin.y()) / true_dist;
+            float nz = (p.z() - origin.z()) / true_dist;
 
             point3f occ_endpt(origin.x() + nx * l, origin.y() + ny * l, origin.z() + nz * l);
-            xy.emplace_back(point6f(occ_endpt), 1.0f);
-            ray_idx.push_back(-1);
+
+            if (!is_sentinel) {
+                xy.emplace_back(point6f(occ_endpt), 1.0f);
+                ray_idx.push_back(-1);
+            }
 
             // point3f free_endpt(origin.x() + nx * (l - free_resolution), origin.y() + ny * (l - free_resolution), origin.z() + nz * (l - 0.1f));
             // point6f line6f(origin, free_endpt);
@@ -346,10 +360,12 @@ namespace la3dm {
                 xy.emplace_back(point6f(p->x(), p->y(), p->z()), 0.0f);
                 ray_idx.push_back(idx);
             }
-            l = l - free_resolution;
-            point3f free_endpt(origin.x() + nx * l, origin.y() + ny * l, origin.z() + nz * l);
-            point6f line6f(origin, free_endpt);
-            rays.emplace_back(line6f, 0.0f);
+            float l_free = is_sentinel ? l : (l - free_resolution);
+            if (l_free > 0) {
+                point3f free_endpt(origin.x() + nx * l_free, origin.y() + ny * l_free, origin.z() + nz * l_free);
+                point6f line6f(origin, free_endpt);
+                rays.emplace_back(line6f, 0.0f);
+            }
 
             frees.clear();
             ++idx;
