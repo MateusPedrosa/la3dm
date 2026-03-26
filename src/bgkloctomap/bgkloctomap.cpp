@@ -37,9 +37,12 @@ namespace la3dm {
                         float occupied_thresh,
                         float var_thresh,
                         float prior_A,
-                        float prior_B)
+                        float prior_B,
+                        float theta_bw,
+                        float phi_bw)
             : resolution(resolution), block_depth(block_depth),
-              block_size((float) pow(2, block_depth - 1) * resolution) {
+              block_size((float) pow(2, block_depth - 1) * resolution),
+              theta_bw(theta_bw), phi_bw(phi_bw) {
         Block::resolution = resolution;
         Block::size = this->block_size;
         Block::key_loc_map = init_key_loc_map(resolution, block_depth);
@@ -80,7 +83,9 @@ namespace la3dm {
         Block::key_loc_map = init_key_loc_map(resolution, block_depth);
     }
 
-    void BGKLOctoMap::insert_pointcloud(const PCLPointCloud &cloud, const point3f &origin, float ds_resolution,
+    void BGKLOctoMap::insert_pointcloud(const PCLPointCloud &cloud, const point3f &origin,
+                                      const point3f &sensor_up,
+                                      float ds_resolution,
                                       float free_res, float max_range) {
 
 #ifdef DEBUG
@@ -102,6 +107,15 @@ namespace la3dm {
 #ifdef DEBUG
         Debug_Msg("Training data size: " << xy.size());
 #endif
+
+        // Prevent Segfault if training data is completely empty
+        if (xy.empty()) {
+            #ifdef DEBUG
+            Debug_Msg("Training data empty after filtering. Skipping map update.");
+            #endif
+            // ROS_INFO_STREAM("Training data empty after filtering. Skipping map update!!!!!!!!!!!!!!!!!");
+            return; 
+        }
 
         point3f lim_min, lim_max;
         bbox(xy, lim_min, lim_max);
@@ -171,7 +185,7 @@ namespace la3dm {
             }
             };
             // std::cout << "number of training blocks" << block_y.size() << std::endl;
-            BGKL3f *bgkl = new BGKL3f(OcTreeNode::sf2, OcTreeNode::ell);
+            BGKL3f *bgkl = new BGKL3f(OcTreeNode::sf2, OcTreeNode::ell, theta_bw, phi_bw);
             bgkl->train(block_x, block_y);
 #ifdef OPENMP
 #pragma omp critical
@@ -216,7 +230,7 @@ namespace la3dm {
                     continue;
 
                 vector<float> ybar, kbar;
-                bgkl->second->predict(xs, ybar, kbar);
+                bgkl->second->predict(origin, sensor_up, xs, ybar, kbar);
 
                 int j = 0;
                 for (auto leaf_it = block->begin_leaf(); leaf_it != block->end_leaf(); ++leaf_it, ++j) {

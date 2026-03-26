@@ -4,7 +4,7 @@
 topic: /occupied_cells_vis_array
 resolution: 0.2
 block_depth: 5 # Test-data octree depth (see Wang & Englot ICRA 2016)
-max_range: 30 # Sensor max range (m)
+max_range: 40 # Sensor max range (m)
 original_size: true 
 
 # Bounds on map height

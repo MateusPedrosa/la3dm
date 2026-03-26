@@ -76,32 +76,42 @@ namespace la3dm {
         typedef pcl::PointXYZ PointType;
         typedef pcl::PointCloud<PointType> PointCloud;
     public:
-        MarkerArrayPub(ros::NodeHandle nh, std::string topic, float resolution) : nh(nh),
+        MarkerArrayPub(ros::NodeHandle nh, std::string topic, float resolution, std::vector<std::string> namespaces = {"map"}) : nh(nh),
                                                                                   msg(new visualization_msgs::MarkerArray),
                                                                                   topic(topic),
                                                                                   resolution(resolution),
                                                                                   markerarray_frame_id("map") {
             pub = nh.advertise<visualization_msgs::MarkerArray>(topic, 1, true);
 
-            msg->markers.resize(10);
-            for (int i = 0; i < 10; ++i) {
-                msg->markers[i].header.frame_id = markerarray_frame_id;
-                msg->markers[i].ns = "map";
-                msg->markers[i].id = i;
-                msg->markers[i].type = visualization_msgs::Marker::CUBE_LIST;
-                msg->markers[i].scale.x = resolution * pow(2, i);
-                msg->markers[i].scale.y = resolution * pow(2, i);
-                msg->markers[i].scale.z = resolution * pow(2, i);
-                std_msgs::ColorRGBA color;
-                color.r = 0.0;
-                color.g = 0.0;
-                color.b = 1.0;
-                color.a = 1.0;
-                msg->markers[i].color = color;
+            msg->markers.resize(10 * namespaces.size());
+            for(size_t n = 0; n < namespaces.size(); ++n) {
+                for (int i = 0; i < 10; ++i) {
+                    int idx = n * 10 + i;
+                    msg->markers[idx].header.frame_id = markerarray_frame_id;
+                    msg->markers[idx].ns = namespaces[n];
+                    msg->markers[idx].id = i;
+                    msg->markers[idx].type = visualization_msgs::Marker::CUBE_LIST;
+                    msg->markers[idx].scale.x = resolution * pow(2, i);
+                    msg->markers[idx].scale.y = resolution * pow(2, i);
+                    msg->markers[idx].scale.z = resolution * pow(2, i);
+                    std_msgs::ColorRGBA color;
+                    color.r = 0.0;
+                    color.g = 0.0;
+                    color.b = 1.0;
+                    color.a = 1.0;
+                    msg->markers[idx].color = color;
+                }
             }
         }
 
-        void insert_point3d(float x, float y, float z, float min_z, float max_z, float size) {
+        int get_ns_offset(const std::string& ns) const {
+            for (size_t i = 0; i < msg->markers.size(); i += 10) {
+                if (msg->markers[i].ns == ns) return i;
+            }
+            return 0;
+        }
+
+        void insert_point3d(float x, float y, float z, float min_z, float max_z, float size, std::string ns = "map") {
             geometry_msgs::Point center;
             center.x = x;
             center.y = y;
@@ -110,6 +120,7 @@ namespace la3dm {
             int depth = 0;
             if (size > 0)
                 depth = (int) log2(size /resolution);
+            depth += get_ns_offset(ns);
 
             msg->markers[depth].points.push_back(center);
 
@@ -119,7 +130,7 @@ namespace la3dm {
             }
         }
 
-        void insert_point3d(float x, float y, float z, float min_z, float max_z, float size, float prob) {
+        void insert_point3d(float x, float y, float z, float min_z, float max_z, float size, float prob, std::string ns = "map") {
             geometry_msgs::Point center;
             center.x = x;
             center.y = y;
@@ -128,6 +139,7 @@ namespace la3dm {
             int depth = 0;
             if (size > 0)
                 depth = (int) log2(size / resolution);
+            depth += get_ns_offset(ns);
 
             msg->markers[depth].points.push_back(center);
 
@@ -146,21 +158,25 @@ namespace la3dm {
             msg->markers[depth].colors.push_back(color);
         }
 
-        void insert_point3d(float x, float y, float z, float min_z, float max_z) {
-            insert_point3d(x, y, z, min_z, max_z, -1.0f);
+        void insert_point3d(float x, float y, float z, float min_z, float max_z, std::string ns = "map") {
+            insert_point3d(x, y, z, min_z, max_z, -1.0f, ns);
         }
 
-        void insert_point3d(float x, float y, float z) {
-            insert_point3d(x, y, z, 1.0f, 0.0f, -1.0f);
+        void insert_point3d(float x, float y, float z, std::string ns = "map") {
+            insert_point3d(x, y, z, 1.0f, 0.0f, -1.0f, ns);
         }
 
-        void insert_color_point3d(float x, float y, float z, double min_v, double max_v, double v) {
+        void insert_color_point3d(float x, float y, float z, double min_v, double max_v, double v, float size = -1.0f, std::string ns = "map") {
             geometry_msgs::Point center;
             center.x = x;
             center.y = y;
             center.z = z;
 
             int depth = 0;
+            if (size > 0)
+                depth = (int) log2(size / resolution);
+            depth += get_ns_offset(ns);
+
             msg->markers[depth].points.push_back(center);
 
             double h = (1.0 - std::min(std::max((v - min_v) / (max_v - min_v), 0.0), 1.0)) * 0.8;
@@ -168,14 +184,16 @@ namespace la3dm {
         }
 
         void clear() {
-            for (int i = 0; i < 10; ++i) {
+            for (size_t i = 0; i < msg->markers.size(); ++i) {
                 msg->markers[i].points.clear();
                 msg->markers[i].colors.clear();
             }
         }
 
         void publish() const {
-            msg->markers[0].header.stamp = ros::Time::now();
+            for (size_t i = 0; i < msg->markers.size(); ++i) {
+                msg->markers[i].header.stamp = ros::Time::now();
+            }
             pub.publish(*msg);
         }
 

@@ -58,7 +58,9 @@ namespace la3dm {
                 float occupied_thresh,
                 float var_thresh,
                 float prior_A,
-                float prior_B);
+                float prior_B,
+                float theta_bw = 0.6f * 3.14159f / 180.0f,
+                float phi_bw = 20.0f * 3.14159f / 180.0f);
 
         ~BGKLOctoMap();
 
@@ -78,11 +80,14 @@ namespace la3dm {
          * @brief Insert PCL PointCloud into BGKLOctoMaps.
          * @param cloud one scan in PCLPointCloud format
          * @param origin sensor origin in the scan
+         * @param sensor_up up vector of the sensor
          * @param ds_resolution downsampling resolution for PCL VoxelGrid filtering (-1 if no downsampling)
          * @param free_res resolution for sampling free training points along sensor beams (default 2.0)
          * @param max_range maximum range for beams to be considered as valid measurements (-1 if no limitation)
          */
-        void insert_pointcloud(const PCLPointCloud &cloud, const point3f &origin, float ds_resolution,
+        void insert_pointcloud(const PCLPointCloud &cloud, const point3f &origin, 
+                               const point3f &sensor_up,
+                               float ds_resolution,
                                float free_res = 2.0f,
                                float max_range = -1);
 
@@ -377,6 +382,8 @@ namespace la3dm {
         float resolution;
         float block_size;
         unsigned short block_depth;
+        float theta_bw;
+        float phi_bw;
         std::unordered_map<BlockHashKey, Block *> block_arr;
         MyRTree rtree;
     };

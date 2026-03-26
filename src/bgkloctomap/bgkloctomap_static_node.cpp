@@ -4,7 +4,7 @@
 #include "bgkloctomap.h"
 #include "markerarray_pub.h"
 
-void load_pcd(std::string filename, la3dm::point3f &origin, la3dm::PCLPointCloud &cloud) {
+void load_pcd(std::string filename, la3dm::point3f &origin, la3dm::point3f &sensor_up, la3dm::PCLPointCloud &cloud) {
     pcl::PCLPointCloud2 cloud2;
     Eigen::Vector4f _origin;
     Eigen::Quaternionf orientaion;
@@ -13,6 +13,11 @@ void load_pcd(std::string filename, la3dm::point3f &origin, la3dm::PCLPointCloud
     origin.x() = _origin[0];
     origin.y() = _origin[1];
     origin.z() = _origin[2];
+
+    Eigen::Matrix3f mat = orientaion.toRotationMatrix();
+    Eigen::Vector3f up = mat.col(2);
+    Eigen::Vector3f right = -mat.col(1);
+    sensor_up = la3dm::point3f(up.x(), up.y(), up.z());
 }
 
 int main(int argc, char **argv) {
@@ -39,6 +44,8 @@ int main(int argc, char **argv) {
     float var_thresh = 1.0f;
     float prior_A = 1.0f;
     float prior_B = 1.0f;
+    float theta_bw = 30.0f * 3.1415926f / 180.0f;
+    float phi_bw = 15.0f * 3.1415926f / 180.0f;
 
     nh.param<std::string>("dir", dir, dir);
     nh.param<std::string>("prefix", prefix, prefix);
@@ -60,6 +67,8 @@ int main(int argc, char **argv) {
     nh.param<float>("var_thresh", var_thresh, var_thresh);
     nh.param<float>("prior_A", prior_A, prior_A);
     nh.param<float>("prior_B", prior_B, prior_B);
+    nh.param<float>("theta_bw", theta_bw, theta_bw);
+    nh.param<float>("phi_bw", phi_bw, phi_bw);
 
     ROS_INFO_STREAM("Parameters:" << std::endl <<
             "dir: " << dir << std::endl <<
@@ -80,19 +89,22 @@ int main(int argc, char **argv) {
             "original_size: " << original_size << std::endl <<
             "var_thresh: " << var_thresh << std::endl <<
             "prior_A: " << prior_A << std::endl <<
-            "prior_B: " << prior_B
+            "prior_B: " << prior_B << std::endl <<
+            "theta_bw: " << theta_bw << std::endl <<
+            "phi_bw: " << phi_bw
             );
 
-    la3dm::BGKLOctoMap map(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh, var_thresh, prior_A, prior_B);
+    la3dm::BGKLOctoMap map(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh, var_thresh, prior_A, prior_B, theta_bw, phi_bw);
 
     ros::Time start = ros::Time::now();
     for (int scan_id = 1; scan_id <= scan_num; ++scan_id) {
         la3dm::PCLPointCloud cloud;
         la3dm::point3f origin;
+        la3dm::point3f sensor_up;
         std::string filename(dir + "/" + prefix + "_" + std::to_string(scan_id) + ".pcd");
-        load_pcd(filename, origin, cloud);
+        load_pcd(filename, origin, sensor_up, cloud);
 
-        map.insert_pointcloud(cloud, origin, resolution, free_resolution, max_range);
+        map.insert_pointcloud(cloud, origin, sensor_up, resolution, free_resolution, max_range);
         ROS_INFO_STREAM("Scan " << scan_id << " done");
     }
     ros::Time end = ros::Time::now();

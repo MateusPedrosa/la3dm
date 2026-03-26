@@ -10,7 +10,7 @@ tf::TransformListener *listener;
 std::string frame_id("/map");
 la3dm::BGKOctoMap *map;
 
-la3dm::MarkerArrayPub *m_pub_occ, *m_pub_free;
+la3dm::MarkerArrayPub *m_pub_occ, *m_pub_free, *m_pub_var;
 
 //startup parameters
 tf::Vector3 last_position;
@@ -23,6 +23,7 @@ bool updated = false;
 //Universal parameters
 std::string map_topic_occ("/occupied_cells_vis_array");
 std::string map_topic_free("/free_cells_vis_array");
+std::string map_topic_var("/variance_vis_array");
 double max_range = -1;
 double resolution = 0.1;
 int block_depth = 4;
@@ -35,6 +36,7 @@ double occupied_thresh = 0.7;
 double min_z = 0;
 double max_z = 0;
 bool original_size = true;
+double max_var_vis = 0.25;
 
 //BGKL parameters
 float var_thresh = 1.0f;
@@ -97,6 +99,7 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
         m_pub_occ->clear();
         m_pub_free->clear();
+        m_pub_var->clear();
 
         for (auto it = map->begin_leaf(); it != map->end_leaf(); ++it) {
 
@@ -132,12 +135,30 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
                 }
                 
             }
+
+            auto state = it.get_node().get_state();
+            if (state == la3dm::State::OCCUPIED || state == la3dm::State::FREE) {
+                std::string ns = (state == la3dm::State::OCCUPIED) ? "occupied" : "free";
+                if (original_size) 
+                {
+                    m_pub_var->insert_color_point3d(p.x(), p.y(), p.z(), 0.0, max_var_vis, it.get_node().get_var(), it.get_size(), ns);
+                } 
+                else 
+                {
+                    auto pruned = it.get_pruned_locs();
+                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n) 
+                    {
+                        m_pub_var->insert_color_point3d(n->x(), n->y(), n->z(), 0.0, max_var_vis, it.get_node().get_var(), map->get_resolution(), ns);
+                    }
+                }
+            }
             
         }
         updated = false;
 
         m_pub_occ->publish();
         m_pub_free->publish();
+        m_pub_var->publish();
 
         ros::Time end2 = ros::Time::now();
         ROS_INFO_STREAM("One map published in " << (end2 - start2).toSec() << "s");
@@ -148,11 +169,12 @@ int main(int argc, char **argv) {
     ros::init(argc, argv, "bgkoctomap_server");
     ros::NodeHandle nh("~");
     //incoming pointcloud topic, this could be put into the .yaml too
-    std::string cloud_topic("/velodyne_points");
+    std::string cloud_topic("/sonar_point_cloud");
 
     //Universal parameters
     nh.param<std::string>("topic", map_topic_occ, map_topic_occ);
     nh.param<std::string>("topic_free", map_topic_free, map_topic_free);
+    nh.param<std::string>("topic_var", map_topic_var, map_topic_var);
     nh.param<double>("max_range", max_range, max_range);
     nh.param<double>("resolution", resolution, resolution);
     nh.param<int>("block_depth", block_depth, block_depth);
@@ -165,6 +187,7 @@ int main(int argc, char **argv) {
     nh.param<double>("min_z", min_z, min_z);
     nh.param<double>("max_z", max_z, max_z);
     nh.param<bool>("original_size", original_size, original_size);
+    nh.param<double>("max_var_vis", max_var_vis, max_var_vis);
 
     //BKGL parameters
     nh.param<float>("var_thresh", var_thresh, var_thresh);
@@ -185,6 +208,7 @@ int main(int argc, char **argv) {
             "min_z: " << min_z << std::endl <<
             "max_z: " << max_z << std::endl <<
             "original_size: " << original_size << std::endl <<
+            "max_var_vis: " << max_var_vis << std::endl <<
             "var_thresh: " << var_thresh << std::endl <<
             "prior_A: " << prior_A << std::endl <<
             "prior_B: " << prior_B
@@ -195,6 +219,7 @@ int main(int argc, char **argv) {
     ros::Subscriber point_sub = nh.subscribe<sensor_msgs::PointCloud2>(cloud_topic, 1, cloudHandler);
     m_pub_occ = new la3dm::MarkerArrayPub(nh, map_topic_occ, resolution);
     m_pub_free = new la3dm::MarkerArrayPub(nh, map_topic_free, resolution);
+    m_pub_var = new la3dm::MarkerArrayPub(nh, map_topic_var, resolution, {"occupied", "free"});
 
     listener = new tf::TransformListener();
     
