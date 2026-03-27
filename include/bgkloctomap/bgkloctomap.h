@@ -13,7 +13,7 @@
 namespace la3dm {
 
     /// PCL PointCloud types as input
-    typedef pcl::PointXYZ PCLPointType;
+    typedef pcl::PointXYZI PCLPointType;
     typedef pcl::PointCloud<PCLPointType> PCLPointCloud;
 
     /*

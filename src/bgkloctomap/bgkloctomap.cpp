@@ -334,6 +334,8 @@ namespace la3dm {
                 l = max_range; // Clamp the ray length so it doesn't clear space to infinity
             }
 
+            bool is_first_hit = (it->intensity > 0.01f);
+
             float nx = (p.x() - origin.x()) / true_dist;
             float ny = (p.y() - origin.y()) / true_dist;
             float nz = (p.z() - origin.z()) / true_dist;
@@ -349,27 +351,29 @@ namespace la3dm {
             // point6f line6f(origin, free_endpt);
             // rays.emplace_back(line6f, 0.0f);
 
-            float l_free = is_sentinel ? l : (l - free_resolution);
+            if (is_first_hit || is_sentinel) {
+                float l_free = is_sentinel ? l : (l - free_resolution);
 
-            if (l_free > 0) {
-                int current_ray_idx = rays.size();
+                if (l_free > 0) {
+                    int current_ray_idx = rays.size();
 
-                PointCloud frees_n;
-                beam_sample(occ_endpt, origin, frees_n, free_resolution);
+                    PointCloud frees_n;
+                    beam_sample(occ_endpt, origin, frees_n, free_resolution);
 
-                // Add origin to xy
-                xy.emplace_back(point6f(origin.x(), origin.y(), origin.z()), 0.0f);
-                ray_idx.push_back(current_ray_idx);
-
-                // Add sampled points to xy
-                for (auto p_free = frees_n.begin(); p_free != frees_n.end(); ++p_free) {
-                    xy.emplace_back(point6f(p_free->x(), p_free->y(), p_free->z()), 0.0f);
+                    // Add origin to xy
+                    xy.emplace_back(point6f(origin.x(), origin.y(), origin.z()), 0.0f);
                     ray_idx.push_back(current_ray_idx);
-                }
 
-                point3f free_endpt(origin.x() + nx * l_free, origin.y() + ny * l_free, origin.z() + nz * l_free);
-                point6f line6f(origin, free_endpt);
-                rays.emplace_back(line6f, 0.0f);
+                    // Add sampled points to xy
+                    for (auto p_free = frees_n.begin(); p_free != frees_n.end(); ++p_free) {
+                        xy.emplace_back(point6f(p_free->x(), p_free->y(), p_free->z()), 0.0f);
+                        ray_idx.push_back(current_ray_idx);
+                    }
+
+                    point3f free_endpt(origin.x() + nx * l_free, origin.y() + ny * l_free, origin.z() + nz * l_free);
+                    point6f line6f(origin, free_endpt);
+                    rays.emplace_back(line6f, 0.0f);
+                }
             }
         }
     }
