@@ -157,7 +157,7 @@ namespace la3dm {
                 continue;
 
             vector<int> ray_keys(rays.size(), 0);
-            vector<float> block_x, block_y;
+            vector<float> block_x, block_y, block_w;
             for (int j = 0; j < xy_idx.size(); ++j) {
 #ifdef OPENMP
 #pragma omp critical
@@ -171,6 +171,7 @@ namespace la3dm {
                     block_x.push_back(xy[xy_idx[j]].first.y0());
                     block_x.push_back(xy[xy_idx[j]].first.z0());
                     block_y.push_back(1.0f);
+                    block_w.push_back(xy[xy_idx[j]].second); // weight computed based on range
                 }
                 else if (ray_keys[ray_idx[xy_idx[j]]] == 0) {
                     ray_keys[ray_idx[xy_idx[j]]] = 1;
@@ -181,12 +182,13 @@ namespace la3dm {
                     block_x.push_back(rays[ray_idx[xy_idx[j]]].first.y1());
                     block_x.push_back(rays[ray_idx[xy_idx[j]]].first.z1());
                     block_y.push_back(0.0f);
+                    block_w.push_back(1.0f); // free space ray gets full evidence weight
                 }
             }
             };
             // std::cout << "number of training blocks" << block_y.size() << std::endl;
             BGKL3f *bgkl = new BGKL3f(OcTreeNode::sf2, OcTreeNode::ell, theta_bw, phi_bw);
-            bgkl->train(block_x, block_y);
+            bgkl->train(block_x, block_y, block_w);
 #ifdef OPENMP
 #pragma omp critical
 #endif
@@ -343,7 +345,15 @@ namespace la3dm {
             point3f occ_endpt(origin.x() + nx * l, origin.y() + ny * l, origin.z() + nz * l);
 
             if (!is_sentinel) {
-                xy.emplace_back(point6f(occ_endpt), 1.0f);
+                // Hits closer than this get maximum evidence.
+                float baseline_range = 1.0f;
+                
+                // Scale peak weight by observation range
+                float peak_weight = baseline_range / (true_dist * true_dist);
+
+                if (peak_weight < 0.05f) peak_weight = 0.05f; // minimum floor
+                
+                xy.emplace_back(point6f(occ_endpt), peak_weight);
                 ray_idx.push_back(-1); // -1 tells the trainer this is an occupied point, not a ray
             }
 

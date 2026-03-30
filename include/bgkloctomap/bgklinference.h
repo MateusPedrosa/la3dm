@@ -29,11 +29,24 @@ namespace la3dm {
          * @param x input vector (3N, row major)
          * @param y target vector (N)
          */
-        void train(const std::vector<T> &x, const std::vector<T> &y) {
+        /*
+         * @brief Fit BGK Model
+         * @param x input vector (3N, row major)
+         * @param y target vector (N)
+         * @param w weight vector (N)
+         */
+        void train(const std::vector<T> &x, const std::vector<T> &y, const std::vector<T> &w = std::vector<T>()) {
             assert(x.size() % (2*dim) == 0 && (int) (x.size() / (2*dim)) == y.size());
             MatrixXType _x = Eigen::Map<const MatrixXType>(x.data(), x.size() / (2*dim), 2*dim);
             MatrixYType _y = Eigen::Map<const MatrixYType>(y.data(), y.size(), 1);
-            train(_x, _y);
+            if (w.empty()) {
+                MatrixYType _w = MatrixYType::Ones(y.size(), 1);
+                train(_x, _y, _w);
+            } else {
+                assert(w.size() == y.size());
+                MatrixYType _w = Eigen::Map<const MatrixYType>(w.data(), w.size(), 1);
+                train(_x, _y, _w);
+            }
         }
 
         /*
@@ -41,11 +54,16 @@ namespace la3dm {
          * @param x input matrix (NX3)
          * @param y target matrix (NX1)
          */
-        void train(const MatrixXType &x, const MatrixYType &y) {
+        void train(const MatrixXType &x, const MatrixYType &y, const MatrixYType &w) {
             // std::cout << "training pt2" << std::endl;
             this->x = MatrixXType(x);
             this->y = MatrixYType(y);
+            this->weights = MatrixYType(w);
             trained = true;
+        }
+
+        void train(const MatrixXType &x, const MatrixYType &y) {
+            train(x, y, MatrixYType::Ones(y.rows(), 1));
         }
 
         /*
@@ -86,8 +104,8 @@ namespace la3dm {
 	        MatrixKType Ks;
         	covSonarBeam(origin, sensor_up, xs, x, Ks);
             // std::cout << "computed covsparseline" << std::endl;
-        	ybar = (Ks * y).array();
-        	kbar = Ks.rowwise().sum().array();
+        	ybar = (Ks * y.cwiseProduct(weights)).array();
+        	kbar = (Ks * weights).array();
         }
 
     private:
@@ -277,6 +295,7 @@ namespace la3dm {
 
         MatrixXType x;   // temporary storage of training data
         MatrixYType y;   // temporary storage of training labels
+        MatrixYType weights; // temporary storage of training sample weights
 
         bool trained;    // true if bgkinference stored training data
     };
