@@ -305,7 +305,7 @@ namespace la3dm {
         PCLPointCloud sampled_hits;
         downsample(cloud, sampled_hits, ds_resolution);
 
-        std::cout << "Sampled points: " << sampled_hits.size() << std::endl;
+        // std::cout << "Sampled points: " << sampled_hits.size() << std::endl;
 
         PCLPointCloud frees;
         frees.height = 1;

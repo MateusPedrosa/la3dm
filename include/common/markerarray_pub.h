@@ -9,7 +9,7 @@
 
 namespace la3dm {
     
-    std_msgs::ColorRGBA heightMapColor(double h) {
+    inline std_msgs::ColorRGBA heightMapColor(double h) {
 
         std_msgs::ColorRGBA color;
         color.a = 1.0;

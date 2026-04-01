@@ -103,6 +103,11 @@ find_package(catkin REQUIRED COMPONENTS
 ## DEPENDS: system dependencies of this project that dependent projects also need
 catkin_package(
   INCLUDE_DIRS include
+               include/common
+               include/bgkloctomap
+               include/bgklvoctomap
+               include/bgkoctomap
+               include/gpoctomap
   LIBRARIES la3dm
   #CATKIN_DEPENDS pcl_ros octomap_ros geometry_msgs visualization_msgs roscpp
 #  DEPENDS system_lib
@@ -165,6 +170,14 @@ set(GP_SOURCE_FILES
   src/gpoctomap/gpoctomap.cpp
   src/gpoctomap/gpoctree_node.cpp
   src/gpoctomap/gpoctree.cpp
+)
+
+add_library(la3dm
+  ${COMMON_SOURCE_FILES}
+  ${BGKL_SOURCE_FILES}
+)
+target_link_libraries(la3dm
+  ${catkin_LIBRARIES}
 )
 
 add_executable(bgklvoctomap_static_node
