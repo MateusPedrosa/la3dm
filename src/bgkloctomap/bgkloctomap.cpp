@@ -242,10 +242,12 @@ namespace la3dm {
                     //     std::cout << "updating the node " << ybar[j] << " " << kbar[j] << std::endl;
                     // }
 
+                    float obs_range = (node_loc - origin).norm();
+
                     // Only need to update if kernel density total kernel density est > 0
                     // TODO param out change threshold?
-                    if (kbar[j] > 0.001f)
-                        node.update(ybar[j], kbar[j]);
+                    if (kbar[j] > 0.000001f)
+                        node.update(ybar[j], kbar[j], obs_range);
                 }
             }
         }

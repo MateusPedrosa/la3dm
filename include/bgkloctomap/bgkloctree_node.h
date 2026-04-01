@@ -8,7 +8,7 @@ namespace la3dm {
 
     /// Occupancy state: before pruning: FREE, OCCUPIED, UNKNOWN; after pruning: PRUNED
     enum class State : char {
-        FREE, OCCUPIED, UNKNOWN, PRUNED
+        FREE, OCCUPIED, UNCERTAIN, UNKNOWN, PRUNED
     };
 
     /*
@@ -50,11 +50,15 @@ namespace la3dm {
          * @brief Exact updates for nonparametric Bayesian kernel inference
          * @param ybar kernel density estimate of positive class (occupied)
          * @param kbar kernel density of negative class (unoccupied)
+         * @param obs_range observation range (distance from sensor to node at the time of observation)
          */
-        void update(float ybar, float kbar);
+        void update(float ybar, float kbar, float obs_range);
 
         /// Get probability of occupancy.
         float get_prob() const;
+
+        inline float get_A() const { return m_A; }
+        inline float get_B() const { return m_B; }
 
         /// Get variance of occupancy (uncertainty)
         inline float get_var() const { return (m_A * m_B) / ( (m_A + m_B) * (m_A + m_B) * (m_A + m_B + 1.0f)); }
@@ -78,6 +82,7 @@ namespace la3dm {
     private:
         float m_A;
         float m_B;
+        bool is_trusted{false};
         State state;
 
         static float sf2;

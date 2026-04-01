@@ -10,7 +10,8 @@ tf::TransformListener *listener;
 std::string frame_id("/map");
 la3dm::BGKLOctoMap *map;
 
-la3dm::MarkerArrayPub *m_pub_occ, *m_pub_free, *m_pub_var;
+la3dm::MarkerArrayPub *m_pub_occ, *m_pub_free, *m_pub_unc, *m_pub_unk, *m_pub_var;
+la3dm::TextMarkerArrayPub *m_pub_free_txt;
 
 //startup parameters
 tf::Vector3 last_position;
@@ -23,6 +24,9 @@ bool updated = false;
 //Universal parameters
 std::string map_topic_occ("/occupied_cells_vis_array");
 std::string map_topic_free("/free_cells_vis_array");
+std::string map_topic_free_txt("/free_cells_txt_vis_array");
+std::string map_topic_unc("/uncertain_cells_vis_array");
+std::string map_topic_unk("/unknown_cells_vis_array");
 std::string map_topic_var("/variance_vis_array");
 double max_range = -1;
 double resolution = 0.1;
@@ -106,6 +110,9 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
         m_pub_occ->clear();
         m_pub_free->clear();
+        m_pub_free_txt->clear();
+        m_pub_unc->clear();
+        m_pub_unk->clear();
         m_pub_var->clear();
 
         for (auto it = map->begin_leaf(); it != map->end_leaf(); ++it) {
@@ -131,6 +138,14 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
                 if (original_size) 
                 {
                     m_pub_free->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size(), it.get_node().get_prob());
+                    float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) + 
+                                    (p.y() - last_position.y()) * (p.y() - last_position.y()) + 
+                                    (p.z() - last_position.z()) * (p.z() - last_position.z());
+                    if (dist_sq < 5.0f) {
+                        char text[50];
+                        snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
+                        m_pub_free_txt->insert_text3d(p.x(), p.y(), p.z(), text, it.get_size());
+                    }
                 } 
                 else 
                 {
@@ -138,14 +153,50 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
                     for (auto n = pruned.cbegin(); n < pruned.cend(); ++n) 
                     {
                         m_pub_free->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution(), it.get_node().get_prob());
+                        float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) + 
+                                        (n->y() - last_position.y()) * (n->y() - last_position.y()) + 
+                                        (n->z() - last_position.z()) * (n->z() - last_position.z());
+                        if (dist_sq < 5.0f) {
+                            char text[50];
+                            snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
+                            m_pub_free_txt->insert_text3d(n->x(), n->y(), n->z(), text, map->get_resolution());
+                        }
                     }
                 }
                 
             }
+            else if(it.get_node().get_state() == la3dm::State::UNCERTAIN)
+            {
+                if (original_size) 
+                {
+                    m_pub_unc->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size());
+                } 
+                else 
+                {
+                    auto pruned = it.get_pruned_locs();
+                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n) 
+                    {
+                        m_pub_unc->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution());
+                    }
+                }
+            }
+            else if(it.get_node().get_state() == la3dm::State::UNKNOWN)
+            {
+                if (original_size) 
+                {
+                    m_pub_unk->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size());
+                } 
+                else 
+                {
+                    auto pruned = it.get_pruned_locs();
+                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n) 
+                        m_pub_unk->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution());
+                }
+            }
 
             auto state = it.get_node().get_state();
-            if (state == la3dm::State::OCCUPIED || state == la3dm::State::FREE) {
-                std::string ns = (state == la3dm::State::OCCUPIED) ? "occupied" : "free";
+            if (state == la3dm::State::OCCUPIED || state == la3dm::State::FREE || state == la3dm::State::UNCERTAIN) {
+                std::string ns = (state == la3dm::State::OCCUPIED) ? "occupied" : (state == la3dm::State::FREE) ? "free" : "uncertain";
                 if (original_size) 
                 {
                     m_pub_var->insert_color_point3d(p.x(), p.y(), p.z(), 0.0, max_var_vis, it.get_node().get_var(), it.get_size(), ns);
@@ -165,6 +216,9 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
         m_pub_occ->publish();
         m_pub_free->publish();
+        m_pub_free_txt->publish();
+        m_pub_unc->publish();
+        m_pub_unk->publish();
         m_pub_var->publish();
 
         ros::Time end2 = ros::Time::now();
@@ -181,6 +235,8 @@ int main(int argc, char **argv) {
     //Universal parameters
     nh.param<std::string>("topic", map_topic_occ, map_topic_occ);
     nh.param<std::string>("topic_free", map_topic_free, map_topic_free);
+    nh.param<std::string>("topic_free_txt", map_topic_free_txt, map_topic_free_txt);
+    nh.param<std::string>("topic_unk", map_topic_unk, map_topic_unk);
     nh.param<double>("max_range", max_range, max_range);
     nh.param<double>("resolution", resolution, resolution);
     nh.param<int>("block_depth", block_depth, block_depth);
@@ -229,7 +285,10 @@ int main(int argc, char **argv) {
     ros::Subscriber point_sub = nh.subscribe<sensor_msgs::PointCloud2>(cloud_topic, 1, cloudHandler);
     m_pub_occ = new la3dm::MarkerArrayPub(nh, map_topic_occ, resolution);
     m_pub_free = new la3dm::MarkerArrayPub(nh, map_topic_free, resolution);
-    m_pub_var = new la3dm::MarkerArrayPub(nh, map_topic_var, resolution, {"occupied", "free"});
+    m_pub_free_txt = new la3dm::TextMarkerArrayPub(nh, map_topic_free_txt, resolution);
+    m_pub_unc = new la3dm::MarkerArrayPub(nh, map_topic_unc, resolution);
+    m_pub_unk = new la3dm::MarkerArrayPub(nh, map_topic_unk, resolution);
+    m_pub_var = new la3dm::MarkerArrayPub(nh, map_topic_var, resolution, {"occupied", "free", "uncertain"});
 
     listener = new tf::TransformListener();
     

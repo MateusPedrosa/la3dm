@@ -206,4 +206,56 @@ namespace la3dm {
         float resolution;
     };
 
+    class TextMarkerArrayPub {
+    public:
+        TextMarkerArrayPub(ros::NodeHandle nh, std::string topic, float resolution) : nh(nh),
+                                                                                  msg(new visualization_msgs::MarkerArray),
+                                                                                  topic(topic),
+                                                                                  resolution(resolution),
+                                                                                  marker_id(0) {
+            pub = nh.advertise<visualization_msgs::MarkerArray>(topic, 1, true);
+        }
+
+        void insert_text3d(float x, float y, float z, const std::string& text, float size) {
+            visualization_msgs::Marker marker;
+            marker.header.frame_id = "map";
+            marker.ns = "text";
+            marker.id = marker_id++;
+            marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
+            marker.action = visualization_msgs::Marker::ADD;
+            marker.pose.position.x = x;
+            marker.pose.position.y = y;
+            marker.pose.position.z = z;
+            marker.pose.orientation.w = 1.0;
+            marker.scale.z = size * 0.2; // Text height
+            marker.color.r = 1.0;
+            marker.color.g = 1.0;
+            marker.color.b = 1.0;
+            marker.color.a = 1.0;
+            marker.text = text;
+            msg->markers.push_back(marker);
+        }
+
+        void clear() {
+            msg->markers.clear();
+            marker_id = 0;
+        }
+
+        void publish() const {
+            if (msg->markers.empty()) return;
+            for (auto& m : msg->markers) {
+                m.header.stamp = ros::Time::now();
+            }
+            pub.publish(*msg);
+        }
+
+    private:
+        ros::NodeHandle nh;
+        ros::Publisher pub;
+        visualization_msgs::MarkerArray::Ptr msg;
+        std::string topic;
+        float resolution;
+        int marker_id;
+    };
+
 }

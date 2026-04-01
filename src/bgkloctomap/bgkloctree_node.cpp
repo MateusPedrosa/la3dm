@@ -28,18 +28,41 @@ namespace la3dm {
         return m_A / (m_A + m_B);
     }
 
-    void Occupancy::update(float ybar, float kbar) {
+    void Occupancy::update(float ybar, float kbar, float obs_range) {
         classified = true;
-        m_A += ybar;
-        m_B += kbar - ybar;
+
+        const float R = 4.0f;
+
+        float occ_w = ybar;
+        float free_w = kbar - ybar;
+
+        if (obs_range < R) { 
+            if (!is_trusted) {
+                m_A = 0.0f;         // Reset the accumulated uncertain mass
+                // m_B = 0.0f;         // Reset the accumulated free mass
+                is_trusted = true;  // Promote voxel to trusted
+            }
+            m_A += occ_w;           // Accumulate trusted evidence
+            m_B += free_w;          // Accumulate free evidence
+        } 
+        else { 
+            // We are far away, this is uncertain evidence
+            if (!is_trusted) {
+                m_A += occ_w;       // Accumulate uncertain mass
+                m_B += free_w;      // Accumulate free evidence
+            } else {
+                // Pass. Voxel is already trusted, protect the estimate 
+                // from noisy long-range observations.
+            }
+        }
 
         float var = get_var();
         if (var > Occupancy::var_thresh)
             state = State::UNKNOWN;
         else {
             float p = get_prob();
-            state = p > Occupancy::occupied_thresh ? State::OCCUPIED : (p < Occupancy::free_thresh ? State::FREE
-                                                                                                   : State::UNKNOWN);
+            state = p > Occupancy::occupied_thresh ? (is_trusted ? State::OCCUPIED : State::UNCERTAIN) :
+                                                     (p < Occupancy::free_thresh ? State::FREE : State::UNKNOWN);
         }
     }
 
