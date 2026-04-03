@@ -183,6 +183,27 @@ namespace la3dm {
             msg->markers[depth].colors.push_back(heightMapColor(h));
         }
 
+        void insert_point3d_color(float x, float y, float z, float size, float r, float g, float b, float a = 1.0f, std::string ns = "map") {
+            geometry_msgs::Point center;
+            center.x = x;
+            center.y = y;
+            center.z = z;
+
+            int depth = 0;
+            if (size > 0)
+                depth = (int) log2(size / resolution);
+            depth += get_ns_offset(ns);
+
+            msg->markers[depth].points.push_back(center);
+
+            std_msgs::ColorRGBA color;
+            color.r = r;
+            color.g = g;
+            color.b = b;
+            color.a = a;
+            msg->markers[depth].colors.push_back(color);
+        }
+
         void clear() {
             for (size_t i = 0; i < msg->markers.size(); ++i) {
                 msg->markers[i].points.clear();
