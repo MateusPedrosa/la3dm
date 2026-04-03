@@ -90,10 +90,14 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
         //downsample for faster mapping
         la3dm::PCLPointCloud filtered_cloud;
+if (ds_resolution > 0.0) {
         pcl::VoxelGrid<pcl::PointXYZI> filterer;
         filterer.setInputCloud(pcl_cloud);
         filterer.setLeafSize(ds_resolution, ds_resolution, ds_resolution);
         filterer.filter(filtered_cloud);
+} else {
+            filtered_cloud = *pcl_cloud;
+        }
 
         if(filtered_cloud.size() > 5){
             map->insert_pointcloud(filtered_cloud, origin, sensor_up, (float) resolution, (float) free_resolution, (float) max_range);
