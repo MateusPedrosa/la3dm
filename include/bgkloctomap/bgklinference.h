@@ -260,15 +260,17 @@ namespace la3dm {
                             phi = 0.0f;
                             theta = 0.0f;
                         }
+
+                        // TODO: consider masking out points outside beamwidth properly instead of just setting kernel to 0, since it may cause discontinuities in the kernel function that could affect inference
+                        if (std::abs(theta) > theta_bw / 2.0f || std::abs(phi) > phi_bw / 2.0f) {
+                            Kxz(i, j) = 0.0f; 
+                            continue;
+                        }
                         
                         if (is_occupied) {
                             w_angular = std::exp(-0.5f * ((theta / sigma_theta) * (theta / sigma_theta) + (phi / sigma_phi) * (phi / sigma_phi)));
                         } else {
-                            if (std::abs(theta) <= theta_bw / 2.0f && std::abs(phi) <= phi_bw / 2.0f) {
                                 w_angular = 1.0f;
-                            } else {
-                                w_angular = 0.0f;
-                            }
                         }
                     } else {
                         continue; // degenerate measurement, skip
