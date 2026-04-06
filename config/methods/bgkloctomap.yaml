@@ -1,5 +1,7 @@
 # BGKLOctoMap config
 
+frame_id: ned_origin
+
 # Map topic, grid cell mininum resolution
 topic: /occupied_cells_vis_array
 resolution: 0.1

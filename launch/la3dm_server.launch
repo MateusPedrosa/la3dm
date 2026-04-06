@@ -3,9 +3,10 @@
     <!-- Sets up an la3dm node with parameters specified by args -->
     <!-- See la3dm/config/methods/bgkoctomap.yaml for config parameters -->
 
-    <!-- Define transform between sensor and map as needed -->
-    <!-- <node pkg="tf" type="static_transform_publisher" name="static_transform_publisher" args="0 0 0 0 0 0 odom map 50"/> -->
-    <!-- <node pkg="tf" type="static_transform_publisher" name="static_transform_publisher2" args="0 0 0 0 0 0 base_link velodyne 50"/> -->
+    <!-- odom -> ned_origin: NED/ENU convention (yaw=pi/2, roll=pi), mirrors oculus_full_setup_launch.py -->
+    <!-- Published here directly to avoid ros1_bridge /tf_static QoS latching issues -->
+    <node pkg="tf" type="static_transform_publisher" name="odom_to_ned_origin"
+          args="0 0 0 1.5708 0 3.14159 odom ned_origin 100"/>
 
     <param name="/use_sim_time" value="true"/>
 

@@ -7,7 +7,7 @@
 #include "bgkloctomap.h"
 
 tf::TransformListener *listener;
-std::string frame_id("/map");
+std::string frame_id("/odom");
 la3dm::BGKLOctoMap *map;
 
 la3dm::MarkerArrayPub *m_pub_occ, *m_pub_free, *m_pub_unc, *m_pub_unk, *m_pub_var;
@@ -55,10 +55,9 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
     
     tf::StampedTransform transform;
     try {
-        // listener->waitForTransform(frame_id, cloud->header.frame_id, cloud->header.stamp, ros::Duration(5.0));
-        listener->lookupTransform(frame_id, cloud->header.frame_id, cloud->header.stamp, transform); //ros::Time::now() -- Don't use this because processing time delay breaks it
+        // ros::Time(0) = "latest available"
+        listener->lookupTransform(frame_id, cloud->header.frame_id, ros::Time(0), transform);
     } catch (tf::TransformException ex) {
-        // ROS_ERROR("%s", ex.what());
         ROS_WARN_THROTTLE(1.0, "Waiting for TF: %s", ex.what());
         return;
     }
@@ -68,27 +67,29 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
     tf::Vector3 translation = transform.getOrigin();
     tf::Quaternion orientation = transform.getRotation();
 
-    if (first || orientation.angleShortestPath(last_orientation) > orientation_change_thresh || translation.distance(last_position) > position_change_thresh) 
+    if (first || orientation.angleShortestPath(last_orientation) > orientation_change_thresh || translation.distance(last_position) > position_change_thresh)
     {
         ROS_INFO_STREAM("Cloud received");
-        
+
         tf::Matrix3x3 mat(orientation);
         tf::Vector3 up = mat.getColumn(2);
 
         la3dm::point3f sensor_up(up.x(), up.y(), up.z());
-        
+
         last_position = translation;
         last_orientation = orientation;
         origin.x() = (float) translation.x();
         origin.y() = (float) translation.y();
         origin.z() = (float) translation.z();
 
-        sensor_msgs::PointCloud2 cloud_map;
-        pcl_ros::transformPointCloud(frame_id, *cloud, cloud_map, *listener);
+        // Convert to PCL and apply the already-looked-up transform directly.
+        // This avoids a second internal TF lookup (with timestamp) inside pcl_ros::transformPointCloud.
+        la3dm::PCLPointCloud::Ptr pcl_cloud_src(new la3dm::PCLPointCloud());
+        pcl::fromROSMsg(*cloud, *pcl_cloud_src);
 
         //pointer required for downsampling
-        la3dm::PCLPointCloud::Ptr pcl_cloud (new la3dm::PCLPointCloud());
-        pcl::fromROSMsg(cloud_map, *pcl_cloud);
+        la3dm::PCLPointCloud::Ptr pcl_cloud(new la3dm::PCLPointCloud());
+        pcl_ros::transformPointCloud(*pcl_cloud_src, *pcl_cloud, transform);
 
         //downsample for faster mapping
         la3dm::PCLPointCloud filtered_cloud;
@@ -296,6 +297,7 @@ int main(int argc, char **argv) {
     nh.param<double>("max_z", max_z, max_z);
     nh.param<bool>("original_size", original_size, original_size);
     nh.param<double>("max_var_vis", max_var_vis, max_var_vis);
+    nh.param<std::string>("frame_id", frame_id, frame_id);
 
     //BKGL parameters
     nh.param<float>("var_thresh", var_thresh, var_thresh);
@@ -305,6 +307,7 @@ int main(int argc, char **argv) {
     nh.param<float>("phi_bw", phi_bw, phi_bw);
 
     ROS_INFO_STREAM("Parameters:" << std::endl <<
+            "frame_id: " << frame_id << std::endl <<
             "topic: " << map_topic_occ << std::endl <<
             "max_range: " << max_range << std::endl <<
             "resolution: " << resolution << std::endl <<
@@ -329,14 +332,14 @@ int main(int argc, char **argv) {
     map = new la3dm::BGKLOctoMap(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh, var_thresh, prior_A, prior_B, theta_bw, phi_bw);
     
     ros::Subscriber point_sub = nh.subscribe<sensor_msgs::PointCloud2>(cloud_topic, 1, cloudHandler);
-    m_pub_occ = new la3dm::MarkerArrayPub(nh, map_topic_occ, resolution);
-    m_pub_free = new la3dm::MarkerArrayPub(nh, map_topic_free, resolution);
-    m_pub_free_txt = new la3dm::TextMarkerArrayPub(nh, map_topic_free_txt, resolution);
-    m_pub_occ_txt = new la3dm::TextMarkerArrayPub(nh, map_topic_occ_txt, resolution);
-    m_pub_unk_txt = new la3dm::TextMarkerArrayPub(nh, map_topic_unk_txt, resolution);
-    m_pub_unc = new la3dm::MarkerArrayPub(nh, map_topic_unc, resolution);
-    m_pub_unk = new la3dm::MarkerArrayPub(nh, map_topic_unk, resolution);
-    m_pub_var = new la3dm::MarkerArrayPub(nh, map_topic_var, resolution, {"occupied", "free", "uncertain"});
+    m_pub_occ = new la3dm::MarkerArrayPub(nh, map_topic_occ, resolution, {"map"}, frame_id);
+    m_pub_free = new la3dm::MarkerArrayPub(nh, map_topic_free, resolution, {"map"}, frame_id);
+    m_pub_free_txt = new la3dm::TextMarkerArrayPub(nh, map_topic_free_txt, resolution, frame_id);
+    m_pub_occ_txt = new la3dm::TextMarkerArrayPub(nh, map_topic_occ_txt, resolution, frame_id);
+    m_pub_unk_txt = new la3dm::TextMarkerArrayPub(nh, map_topic_unk_txt, resolution, frame_id);
+    m_pub_unc = new la3dm::MarkerArrayPub(nh, map_topic_unc, resolution, {"map"}, frame_id);
+    m_pub_unk = new la3dm::MarkerArrayPub(nh, map_topic_unk, resolution, {"map"}, frame_id);
+    m_pub_var = new la3dm::MarkerArrayPub(nh, map_topic_var, resolution, {"occupied", "free", "uncertain"}, frame_id);
 
     listener = new tf::TransformListener();
     

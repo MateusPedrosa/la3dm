@@ -76,11 +76,11 @@ namespace la3dm {
         typedef pcl::PointXYZ PointType;
         typedef pcl::PointCloud<PointType> PointCloud;
     public:
-        MarkerArrayPub(ros::NodeHandle nh, std::string topic, float resolution, std::vector<std::string> namespaces = {"map"}) : nh(nh),
+        MarkerArrayPub(ros::NodeHandle nh, std::string topic, float resolution, std::vector<std::string> namespaces = {"map"}, std::string frame_id = "map") : nh(nh),
                                                                                   msg(new visualization_msgs::MarkerArray),
                                                                                   topic(topic),
                                                                                   resolution(resolution),
-                                                                                  markerarray_frame_id("map") {
+                                                                                  markerarray_frame_id(frame_id) {
             pub = nh.advertise<visualization_msgs::MarkerArray>(topic, 1, true);
 
             msg->markers.resize(10 * namespaces.size());
@@ -229,17 +229,18 @@ namespace la3dm {
 
     class TextMarkerArrayPub {
     public:
-        TextMarkerArrayPub(ros::NodeHandle nh, std::string topic, float resolution) : nh(nh),
+        TextMarkerArrayPub(ros::NodeHandle nh, std::string topic, float resolution, std::string frame_id = "map") : nh(nh),
                                                                                   msg(new visualization_msgs::MarkerArray),
                                                                                   topic(topic),
                                                                                   resolution(resolution),
+                                                                                  marker_frame_id(frame_id),
                                                                                   marker_id(0) {
             pub = nh.advertise<visualization_msgs::MarkerArray>(topic, 1, true);
         }
 
         void insert_text3d(float x, float y, float z, const std::string& text, float size) {
             visualization_msgs::Marker marker;
-            marker.header.frame_id = "map";
+            marker.header.frame_id = marker_frame_id;
             marker.ns = "text";
             marker.id = marker_id++;
             marker.type = visualization_msgs::Marker::TEXT_VIEW_FACING;
@@ -275,6 +276,7 @@ namespace la3dm {
         ros::Publisher pub;
         visualization_msgs::MarkerArray::Ptr msg;
         std::string topic;
+        std::string marker_frame_id;
         float resolution;
         int marker_id;
     };
