@@ -84,12 +84,14 @@ namespace la3dm {
          * @param ds_resolution downsampling resolution for PCL VoxelGrid filtering (-1 if no downsampling)
          * @param free_res resolution for sampling free training points along sensor beams (default 2.0)
          * @param max_range maximum range for beams to be considered as valid measurements (-1 if no limitation)
+         * @param w_novelty weight to scale the evidence from this scan according to its pose novelty (default 1.0; no scaling)
          */
         void insert_pointcloud(const PCLPointCloud &cloud, const point3f &origin, 
                                const point3f &sensor_up,
                                float ds_resolution,
                                float free_res = 2.0f,
-                               float max_range = -1);
+                               float max_range = -1,
+                               float w_novelty = 1.0f);
 
         void insert_training_data(const GPLineCloud &cloud);
 

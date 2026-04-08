@@ -3,6 +3,7 @@
 #include <ros/ros.h>
 #include <pcl_ros/transforms.h>
 #include <pcl/filters/voxel_grid.h>
+#include <geometry_msgs/PoseArray.h>
 #include "markerarray_pub.h"
 #include "bgkloctomap.h"
 
@@ -12,13 +13,25 @@ la3dm::BGKLOctoMap *map;
 
 la3dm::MarkerArrayPub *m_pub_occ, *m_pub_free, *m_pub_unc, *m_pub_unk, *m_pub_var;
 la3dm::TextMarkerArrayPub *m_pub_free_txt, *m_pub_occ_txt, *m_pub_unk_txt;
+ros::Publisher viewpoints_pub;
 
-//startup parameters
+// Tracking for visualization of past processed viewpoints
 tf::Vector3 last_position;
 tf::Quaternion last_orientation;
 bool first = true;
-double position_change_thresh = 0.1;
-double orientation_change_thresh = 0.2;
+std::vector<tf::Transform> past_viewpoints;
+
+// Anisotropic pose-distance parameters (shared by temporal buffer and legacy novelty weight)
+double w_roll = 1.0;
+double w_pitch_z = 0.8;
+double w_yaw_xy = 0.05;
+double nov_ell = 5.0;   // characteristic length [m] to normalise translations
+
+// Legacy novelty-weight parameters (kept for backward-compat; no longer used for frame gating)
+double nov_sigma = 0.5;
+double min_novelty = 0.05;
+double nov_dist_thresh = 15.0;
+
 bool updated = false;
 
 //Universal parameters
@@ -51,69 +64,202 @@ float prior_B = 1.0f;
 float theta_bw = 0.6f * 3.1415926f / 180.0f;
 float phi_bw = 20.0f * 3.1415926f / 180.0f;
 
+// Lifecycle (info matrix deallocation) parameters
+float tau_var  = 0.01f;
+float tau_info = 0.5f;
+
+// ---------------------------------------------------------------------------
+// Temporal Buffer: aggregate frames from nearly identical poses to
+// average out measurement noise before the map update.
+// ---------------------------------------------------------------------------
+struct TemporalBuffer {
+    tf::Transform T_ref;
+    la3dm::PCLPointCloud accumulated_cloud;
+    int frame_count = 0;
+    bool initialized = false;
+} temp_buffer;
+
+// d_buffer_threshold: flush the buffer when the anisotropic pose distance from
+// T_ref to the new frame exceeds this value.  Must be much smaller than the
+// novelty-weight bandwidth (≈ 0.3–1.0); typical value 0.02.
+double d_buffer_threshold = 0.02;
+
+// buffer_max_frames: flush the buffer after this many frames even if the sensor
+// hasn't moved enough.  Prevents indefinite accumulation when stationary.
+int buffer_max_frames = 10;
+
+// SE(3) Lie Algebra distance for FLS viewpoints (returns distance squared)
+double compute_se3_distance_sq(const tf::Transform& T_diff) {
+    tf::Vector3 t = T_diff.getOrigin();
+    tf::Quaternion q = T_diff.getRotation();
+
+    // Convert rotation to axis-angle to approximate twist ω
+    double angle = q.getAngle();
+    tf::Vector3 axis = q.getAxis();
+    tf::Vector3 omega = axis * angle;
+
+    // For small rotations, log(T_diff) translation is approximately t
+    // Order: x-forward, y-starboard, z-down
+    double w_x = omega.x();
+    double w_y = omega.y();
+    double w_z = omega.z();
+
+    double v_x = t.x();
+    double v_y = t.y();
+    double v_z = t.z();
+
+    double ell_sq = nov_ell * nov_ell;
+
+    // Anisotropic distance according to FLS measurement bounds
+    double dist_sq = w_roll * (w_x * w_x) +
+                     w_pitch_z * ((w_y * w_y) + (v_z * v_z) / ell_sq) +
+                     w_yaw_xy * ((w_z * w_z) + (v_x * v_x) / ell_sq + (v_y * v_y) / ell_sq);
+
+    return dist_sq;
+}
+
+// Downsample a PCL cloud in place using a VoxelGrid filter.
+static void voxelgrid_downsample(const la3dm::PCLPointCloud &in,
+                                 la3dm::PCLPointCloud &out,
+                                 float leaf_size) {
+    la3dm::PCLPointCloud::Ptr in_ptr(new la3dm::PCLPointCloud(in));
+    pcl::VoxelGrid<la3dm::PCLPointType> sor;
+    sor.setInputCloud(in_ptr);
+    sor.setLeafSize(leaf_size, leaf_size, leaf_size);
+    sor.filter(out);
+}
+
+// Flush the temporal buffer: downsample the accumulated cloud (noise averaging),
+// then call map->insert_pointcloud with the buffer's reference pose.
+// Returns true if a map update was issued.
+static bool flush_buffer() {
+    if (!temp_buffer.initialized || temp_buffer.frame_count == 0) return false;
+
+    la3dm::PCLPointCloud avg_cloud;
+    if (ds_resolution > 0.0) {
+        voxelgrid_downsample(temp_buffer.accumulated_cloud, avg_cloud, (float)ds_resolution);
+    } else {
+        avg_cloud = temp_buffer.accumulated_cloud;
+    }
+
+    if (avg_cloud.size() <= 5) return false;
+
+    tf::Vector3 translation = temp_buffer.T_ref.getOrigin();
+    tf::Quaternion orientation = temp_buffer.T_ref.getRotation();
+
+    la3dm::point3f origin;
+    origin.x() = (float)translation.x();
+    origin.y() = (float)translation.y();
+    origin.z() = (float)translation.z();
+
+    tf::Matrix3x3 mat(orientation);
+    tf::Vector3 up = mat.getColumn(2);
+    la3dm::point3f sensor_up(up.x(), up.y(), up.z());
+
+    // Per-voxel information weighting replaces pose-level novelty; pass 1.0.
+    const float w_novelty = 1.0f;
+    map->insert_pointcloud(avg_cloud, origin, sensor_up,
+                           (float)resolution, (float)free_resolution,
+                           (float)max_range, w_novelty);
+
+    ROS_INFO_STREAM("Buffer flushed: " << temp_buffer.frame_count << " frame(s) → "
+                    << avg_cloud.size() << " pts after averaging.");
+    return true;
+}
+
 void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
-    
+
     tf::StampedTransform transform;
     try {
-        // ros::Time(0) = "latest available"
         listener->lookupTransform(frame_id, cloud->header.frame_id, ros::Time(0), transform);
     } catch (tf::TransformException ex) {
         ROS_WARN_THROTTLE(1.0, "Waiting for TF: %s", ex.what());
         return;
     }
 
-    ros::Time start = ros::Time::now();
-    la3dm::point3f origin;
     tf::Vector3 translation = transform.getOrigin();
     tf::Quaternion orientation = transform.getRotation();
+    tf::Transform T_new(orientation, translation);
 
-    if (first || orientation.angleShortestPath(last_orientation) > orientation_change_thresh || translation.distance(last_position) > position_change_thresh)
-    {
-        ROS_INFO_STREAM("Cloud received");
-
-        tf::Matrix3x3 mat(orientation);
-        tf::Vector3 up = mat.getColumn(2);
-
-        la3dm::point3f sensor_up(up.x(), up.y(), up.z());
-
-        last_position = translation;
-        last_orientation = orientation;
-        origin.x() = (float) translation.x();
-        origin.y() = (float) translation.y();
-        origin.z() = (float) translation.z();
-
-        // Convert to PCL and apply the already-looked-up transform directly.
-        // This avoids a second internal TF lookup (with timestamp) inside pcl_ros::transformPointCloud.
-        la3dm::PCLPointCloud::Ptr pcl_cloud_src(new la3dm::PCLPointCloud());
-        pcl::fromROSMsg(*cloud, *pcl_cloud_src);
-
-        //pointer required for downsampling
-        la3dm::PCLPointCloud::Ptr pcl_cloud(new la3dm::PCLPointCloud());
-        pcl_ros::transformPointCloud(*pcl_cloud_src, *pcl_cloud, transform);
-
-        //downsample for faster mapping
-        la3dm::PCLPointCloud filtered_cloud;
-        if (ds_resolution > 0.0) {
-            pcl::VoxelGrid<pcl::PointXYZI> filterer;
-            filterer.setInputCloud(pcl_cloud);
-            filterer.setLeafSize(ds_resolution, ds_resolution, ds_resolution);
-            filterer.filter(filtered_cloud);
-        } else {
-            filtered_cloud = *pcl_cloud;
-        }
-
-        if(filtered_cloud.size() > 5){
-            map->insert_pointcloud(filtered_cloud, origin, sensor_up, (float) resolution, (float) free_resolution, (float) max_range);
-        }
-
-        ros::Time end = ros::Time::now();
-        ROS_INFO_STREAM("One cloud finished in " << (end - start).toSec() << "s");
-        updated = true;
-        first = false;
+    size_t expected = (size_t)cloud->width * cloud->height * cloud->point_step;
+    if (cloud->data.size() < expected) {
+        ROS_WARN_THROTTLE(1.0, "Malformed PointCloud2: data.size()=%zu < expected=%zu, skipping",
+                          cloud->data.size(), expected);
+        return;
     }
 
+    la3dm::PCLPointCloud::Ptr pcl_cloud_src(new la3dm::PCLPointCloud());
+    pcl::fromROSMsg(*cloud, *pcl_cloud_src);
 
-    if (updated) 
+    la3dm::PCLPointCloud::Ptr pcl_cloud_world(new la3dm::PCLPointCloud());
+    pcl_ros::transformPointCloud(*pcl_cloud_src, *pcl_cloud_world, transform);
+
+    // Temporal buffer — accumulate frames from similar poses for noise
+    // averaging; flush when the pose has moved enough.
+    if (!temp_buffer.initialized) {
+        // First frame: initialise buffer and wait for the next flush trigger.
+        temp_buffer.T_ref = T_new;
+        temp_buffer.accumulated_cloud = *pcl_cloud_world;
+        temp_buffer.frame_count = 1;
+        temp_buffer.initialized = true;
+        ROS_INFO_STREAM("Temporal buffer initialised.");
+        first = false;
+        return;
+    }
+
+    tf::Transform T_rel = temp_buffer.T_ref.inverse() * T_new;
+    double d_sq = compute_se3_distance_sq(T_rel);
+    double d_threshold_sq = d_buffer_threshold * d_buffer_threshold;
+
+    if (d_sq < d_threshold_sq && temp_buffer.frame_count < buffer_max_frames) {
+        // Pose is close to reference and below frame cap: accumulate for noise averaging.
+        temp_buffer.accumulated_cloud += *pcl_cloud_world;
+        temp_buffer.frame_count++;
+        ROS_DEBUG_STREAM_THROTTLE(1.0, "Buffer accumulating (frame " << temp_buffer.frame_count
+                                  << ", d=" << std::sqrt(d_sq) << ").");
+        return;
+    }
+
+    // Pose has moved enough: flush the buffer.
+    ros::Time start = ros::Time::now();
+    bool map_updated = flush_buffer();
+
+    if (map_updated) {
+        last_position  = temp_buffer.T_ref.getOrigin();
+        last_orientation = temp_buffer.T_ref.getRotation();
+        past_viewpoints.push_back(temp_buffer.T_ref);
+        updated = true;
+    }
+
+    // Start a new buffer window with the current frame.
+    temp_buffer.T_ref = T_new;
+    temp_buffer.accumulated_cloud = *pcl_cloud_world;
+    temp_buffer.frame_count = 1;
+
+    if (map_updated) {
+        ros::Time end = ros::Time::now();
+        ROS_INFO_STREAM("Map update finished in " << (end - start).toSec() << "s");
+
+        // Publish viewpoints for visualisation.
+        geometry_msgs::PoseArray pose_array;
+        pose_array.header.frame_id = frame_id;
+        pose_array.header.stamp = ros::Time::now();
+        for (const auto& T : past_viewpoints) {
+            geometry_msgs::Pose pose;
+            pose.position.x = T.getOrigin().x();
+            pose.position.y = T.getOrigin().y();
+            pose.position.z = T.getOrigin().z();
+            pose.orientation.x = T.getRotation().x();
+            pose.orientation.y = T.getRotation().y();
+            pose.orientation.z = T.getRotation().z();
+            pose.orientation.w = T.getRotation().w();
+            pose_array.poses.push_back(pose);
+        }
+        viewpoints_pub.publish(pose_array);
+    }
+
+    // Publish map visualisation whenever the map was updated.
+    if (updated)
     {
         ros::Time start2 = ros::Time::now();
 
@@ -131,26 +277,26 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
             la3dm::point3f p = it.get_loc();
 
             if (it.get_node().get_state() == la3dm::State::OCCUPIED) {
-                if (original_size) 
+                if (original_size)
                 {
                     m_pub_occ->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size());
-                    float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) + 
-                                    (p.y() - last_position.y()) * (p.y() - last_position.y()) + 
+                    float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) +
+                                    (p.y() - last_position.y()) * (p.y() - last_position.y()) +
                                     (p.z() - last_position.z()) * (p.z() - last_position.z());
                     if (dist_sq < 5.0f) {
                         char text[50];
                         snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
                         m_pub_occ_txt->insert_text3d(p.x(), p.y(), p.z(), text, it.get_size());
                     }
-                } 
-                else 
+                }
+                else
                 {
                     auto pruned = it.get_pruned_locs();
-                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n) 
+                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
                     {
                         m_pub_occ->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution());
-                        float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) + 
-                                        (n->y() - last_position.y()) * (n->y() - last_position.y()) + 
+                        float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) +
+                                        (n->y() - last_position.y()) * (n->y() - last_position.y()) +
                                         (n->z() - last_position.z()) * (n->z() - last_position.z());
                         if (dist_sq < 5.0f) {
                             char text[50];
@@ -162,26 +308,26 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
             }
             else if(it.get_node().get_state() == la3dm::State::FREE)
             {
-                if (original_size) 
+                if (original_size)
                 {
                     m_pub_free->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size(), it.get_node().get_prob());
-                    float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) + 
-                                    (p.y() - last_position.y()) * (p.y() - last_position.y()) + 
+                    float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) +
+                                    (p.y() - last_position.y()) * (p.y() - last_position.y()) +
                                     (p.z() - last_position.z()) * (p.z() - last_position.z());
                     if (dist_sq < 5.0f) {
                         char text[50];
                         snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
                         m_pub_free_txt->insert_text3d(p.x(), p.y(), p.z(), text, it.get_size());
                     }
-                } 
-                else 
+                }
+                else
                 {
                     auto pruned = it.get_pruned_locs();
-                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n) 
+                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
                     {
                         m_pub_free->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution(), it.get_node().get_prob());
-                        float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) + 
-                                        (n->y() - last_position.y()) * (n->y() - last_position.y()) + 
+                        float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) +
+                                        (n->y() - last_position.y()) * (n->y() - last_position.y()) +
                                         (n->z() - last_position.z()) * (n->z() - last_position.z());
                         if (dist_sq < 5.0f) {
                             char text[50];
@@ -190,18 +336,18 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
                         }
                     }
                 }
-                
+
             }
             else if(it.get_node().get_state() == la3dm::State::UNCERTAIN)
             {
-                if (original_size) 
+                if (original_size)
                 {
                     m_pub_unc->insert_point3d_color(p.x(), p.y(), p.z(), it.get_size(), 1.0f, 1.0f, 0.0f);
-                } 
-                else 
+                }
+                else
                 {
                     auto pruned = it.get_pruned_locs();
-                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n) 
+                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
                     {
                         m_pub_unc->insert_point3d_color(n->x(), n->y(), n->z(), map->get_resolution(), 1.0f, 1.0f, 0.0f);
                     }
@@ -209,26 +355,26 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
             }
             else if(it.get_node().get_state() == la3dm::State::UNKNOWN)
             {
-                if (original_size) 
+                if (original_size)
                 {
                     m_pub_unk->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size());
-                    float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) + 
-                                    (p.y() - last_position.y()) * (p.y() - last_position.y()) + 
+                    float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) +
+                                    (p.y() - last_position.y()) * (p.y() - last_position.y()) +
                                     (p.z() - last_position.z()) * (p.z() - last_position.z());
                     if (dist_sq < 15.0f) {
                         char text[50];
                         snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
                         m_pub_unk_txt->insert_text3d(p.x(), p.y(), p.z(), text, it.get_size());
                     }
-                } 
-                else 
+                }
+                else
                 {
                     auto pruned = it.get_pruned_locs();
                     for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
                     {
                         m_pub_unk->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution());
-                        float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) + 
-                                        (n->y() - last_position.y()) * (n->y() - last_position.y()) + 
+                        float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) +
+                                        (n->y() - last_position.y()) * (n->y() - last_position.y()) +
                                         (n->z() - last_position.z()) * (n->z() - last_position.z());
                         if (dist_sq < 15.0f) {
                             char text[50];
@@ -242,20 +388,20 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
             auto state = it.get_node().get_state();
             if (state == la3dm::State::OCCUPIED || state == la3dm::State::FREE || state == la3dm::State::UNCERTAIN) {
                 std::string ns = (state == la3dm::State::OCCUPIED) ? "occupied" : (state == la3dm::State::FREE) ? "free" : "uncertain";
-                if (original_size) 
+                if (original_size)
                 {
                     m_pub_var->insert_color_point3d(p.x(), p.y(), p.z(), 0.0, max_var_vis, it.get_node().get_var(), it.get_size(), ns);
-                } 
-                else 
+                }
+                else
                 {
                     auto pruned = it.get_pruned_locs();
-                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n) 
+                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
                     {
                         m_pub_var->insert_color_point3d(n->x(), n->y(), n->z(), 0.0, max_var_vis, it.get_node().get_var(), map->get_resolution(), ns);
                     }
                 }
             }
-            
+
         }
         updated = false;
 
@@ -299,12 +445,31 @@ int main(int argc, char **argv) {
     nh.param<double>("max_var_vis", max_var_vis, max_var_vis);
     nh.param<std::string>("frame_id", frame_id, frame_id);
 
+    // Anisotropic pose-distance parameters
+    nh.param<double>("w_roll",    w_roll,    w_roll);
+    nh.param<double>("w_pitch_z", w_pitch_z, w_pitch_z);
+    nh.param<double>("w_yaw_xy",  w_yaw_xy,  w_yaw_xy);
+    nh.param<double>("nov_ell",   nov_ell,   nov_ell);
+
+    // Legacy novelty-weight parameters (no longer used for frame gating)
+    nh.param<double>("nov_sigma",       nov_sigma,       nov_sigma);
+    nh.param<double>("min_novelty",     min_novelty,     min_novelty);
+    nh.param<double>("nov_dist_thresh", nov_dist_thresh, nov_dist_thresh);
+
+    // Temporal buffer parameters
+    nh.param<double>("d_buffer_threshold", d_buffer_threshold, d_buffer_threshold);
+    nh.param<int>("buffer_max_frames", buffer_max_frames, buffer_max_frames);
+
     //BKGL parameters
-    nh.param<float>("var_thresh", var_thresh, var_thresh);
-    nh.param<float>("prior_A", prior_A, prior_A);
-    nh.param<float>("prior_B", prior_B, prior_B);
-    nh.param<float>("theta_bw", theta_bw, theta_bw);
-    nh.param<float>("phi_bw", phi_bw, phi_bw);
+    nh.param<float>("var_thresh",  var_thresh,  var_thresh);
+    nh.param<float>("prior_A",     prior_A,     prior_A);
+    nh.param<float>("prior_B",     prior_B,     prior_B);
+    nh.param<float>("theta_bw",    theta_bw,    theta_bw);
+    nh.param<float>("phi_bw",      phi_bw,      phi_bw);
+
+    // Lifecycle (info matrix deallocation) parameters
+    nh.param<float>("tau_var",  tau_var,  tau_var);
+    nh.param<float>("tau_info", tau_info, tau_info);
 
     ROS_INFO_STREAM("Parameters:" << std::endl <<
             "frame_id: " << frame_id << std::endl <<
@@ -322,15 +487,28 @@ int main(int argc, char **argv) {
             "max_z: " << max_z << std::endl <<
             "original_size: " << original_size << std::endl <<
             "max_var_vis: " << max_var_vis << std::endl <<
+            "w_roll: " << w_roll << std::endl <<
+            "w_pitch_z: " << w_pitch_z << std::endl <<
+            "w_yaw_xy: " << w_yaw_xy << std::endl <<
+            "nov_ell: " << nov_ell << std::endl <<
+            "d_buffer_threshold: " << d_buffer_threshold << std::endl <<
+            "buffer_max_frames: " << buffer_max_frames << std::endl <<
             "var_thresh: " << var_thresh << std::endl <<
             "prior_A: " << prior_A << std::endl <<
             "prior_B: " << prior_B << std::endl <<
             "theta_bw: " << theta_bw << std::endl <<
-            "phi_bw: " << phi_bw
+            "phi_bw: " << phi_bw << std::endl <<
+            "tau_var: " << tau_var << std::endl <<
+            "tau_info: " << tau_info
             );
 
-    map = new la3dm::BGKLOctoMap(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh, var_thresh, prior_A, prior_B, theta_bw, phi_bw);
-    
+    map = new la3dm::BGKLOctoMap(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh,
+                                  var_thresh, prior_A, prior_B, theta_bw, phi_bw);
+
+    // Set lifecycle thresholds on the voxel class
+    la3dm::OcTreeNode::tau_var  = tau_var;
+    la3dm::OcTreeNode::tau_info = tau_info;
+
     ros::Subscriber point_sub = nh.subscribe<sensor_msgs::PointCloud2>(cloud_topic, 1, cloudHandler);
     m_pub_occ = new la3dm::MarkerArrayPub(nh, map_topic_occ, resolution, {"map"}, frame_id);
     m_pub_free = new la3dm::MarkerArrayPub(nh, map_topic_free, resolution, {"map"}, frame_id);
@@ -341,8 +519,10 @@ int main(int argc, char **argv) {
     m_pub_unk = new la3dm::MarkerArrayPub(nh, map_topic_unk, resolution, {"map"}, frame_id);
     m_pub_var = new la3dm::MarkerArrayPub(nh, map_topic_var, resolution, {"occupied", "free", "uncertain"}, frame_id);
 
+    viewpoints_pub = nh.advertise<geometry_msgs::PoseArray>("viewpoints", 1, true);
+
     listener = new tf::TransformListener();
-    
+
     while(ros::ok())
     {
     	ros::spin();

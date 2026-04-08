@@ -86,7 +86,7 @@ namespace la3dm {
     void BGKLOctoMap::insert_pointcloud(const PCLPointCloud &cloud, const point3f &origin,
                                       const point3f &sensor_up,
                                       float ds_resolution,
-                                      float free_res, float max_range) {
+                                      float free_res, float max_range, float w_novelty) {
 
 #ifdef DEBUG
         Debug_Msg("Insert pointcloud: " << "cloud size: " << cloud.size() << " origin: " << origin);
@@ -187,7 +187,7 @@ namespace la3dm {
             }
             };
             // std::cout << "number of training blocks" << block_y.size() << std::endl;
-            BGKL3f *bgkl = new BGKL3f(OcTreeNode::sf2, OcTreeNode::ell, theta_bw, phi_bw);
+            BGKL3f *bgkl = new BGKL3f(OcTreeNode::sf2, OcTreeNode::ell, theta_bw, phi_bw, w_novelty);
             bgkl->train(block_x, block_y, block_w);
 #ifdef OPENMP
 #pragma omp critical
@@ -238,16 +238,56 @@ namespace la3dm {
                 for (auto leaf_it = block->begin_leaf(); leaf_it != block->end_leaf(); ++leaf_it, ++j) {
                     OcTreeNode &node = leaf_it.get_node();
                     auto node_loc = block->get_loc(leaf_it);
-                    // if (node_loc.x() == 7.45 && node_loc.y() == 10.15 && node_loc.z() == 1.15) {
-                    //     std::cout << "updating the node " << ybar[j] << " " << kbar[j] << std::endl;
-                    // }
 
-                    float obs_range = (node_loc - origin).norm();
+                    float obs_range = (float)(node_loc - origin).norm();
 
                     // Only need to update if kernel density total kernel density est > 0
-                    // TODO param out change threshold?
-                    if (kbar[j] > 0.000001f)
-                        node.update(ybar[j], kbar[j], obs_range);
+                    if (kbar[j] > 0.000001f) {
+                        // ---- Compute constraint direction n ----
+                        // n = normalize(sensor_up - (sensor_up · loŝ) · loŝ)
+                        // where loŝ = normalize(node_loc - origin)
+                        // sensor_up is the sonar's vertical axis (beam-spread direction) in world frame
+                        point3f los_vec = node_loc - origin;
+                        point3f n_vec;
+                        bool valid_n = false;
+
+                        if (obs_range > 1e-6f) {
+                            point3f los_hat = los_vec * (1.0f / obs_range);
+                            float dot_su = (float)sensor_up.dot(los_hat);
+                            n_vec = sensor_up - los_hat * dot_su;
+                            float n_norm = (float)n_vec.norm();
+                            if (n_norm > 1e-8f) {
+                                n_vec *= (1.0f / n_norm);
+                                valid_n = true;
+                            }
+                        }
+
+                        if (valid_n) {
+                            // ---- Per-voxel evidence weight ----
+                            // w_voxel = 1 - (nᵀ I n) / (λ_max_cache + ε)
+                            float w_voxel = node.compute_w_voxel(n_vec);
+
+                            // ---- Rank-1 information matrix update ----
+                            // I(p) += w_range · n nᵀ  (uses w_range only, NOT w_voxel)
+                            // Matches training-data formula: w_range ≈ 1/r², floored at 0.05
+                            float w_range = 1.0f / (obs_range * obs_range + 1.0f);
+                            if (w_range < 0.05f) w_range = 0.05f;
+                            node.update_info_matrix(n_vec, w_range);
+
+                            // ---- Beta update with w_total = w_range_baked * w_voxel ----
+                            // ybar/kbar already encode w_range (training-data peak_weight).
+                            // Scaling by w_voxel gives the combined novelty-weighted evidence.
+                            if (w_voxel > 1e-8f)
+                                node.update(ybar[j] * w_voxel, kbar[j] * w_voxel, obs_range);
+
+                            // ---- Lifecycle management ----
+                            node.check_deallocation();
+                        } else {
+                            // Degenerate geometry: LOS parallel to sensor_up (rare).
+                            // Fall back to full-weight update.
+                            node.update(ybar[j], kbar[j], obs_range);
+                        }
+                    }
                 }
             }
         }
