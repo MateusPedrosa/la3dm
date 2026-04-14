@@ -2,7 +2,6 @@
 #include <iostream>
 #include <ros/ros.h>
 #include <pcl_ros/transforms.h>
-#include <pcl/filters/voxel_grid.h>
 #include <geometry_msgs/PoseArray.h>
 #include "markerarray_pub.h"
 #include "bgkloctomap.h"
@@ -18,21 +17,7 @@ ros::Publisher viewpoints_pub;
 // Tracking for visualization of past processed viewpoints
 tf::Vector3 last_position;
 tf::Quaternion last_orientation;
-bool first = true;
 std::vector<tf::Transform> past_viewpoints;
-
-// Anisotropic pose-distance parameters (shared by temporal buffer and legacy novelty weight)
-double w_roll = 1.0;
-double w_pitch_z = 0.8;
-double w_yaw_xy = 0.05;
-double nov_ell = 5.0;   // characteristic length [m] to normalise translations
-
-// Legacy novelty-weight parameters (kept for backward-compat; no longer used for frame gating)
-double nov_sigma = 0.5;
-double min_novelty = 0.05;
-double nov_dist_thresh = 15.0;
-
-bool updated = false;
 
 //Universal parameters
 std::string map_topic_occ("/occupied_cells_vis_array");
@@ -43,13 +28,12 @@ std::string map_topic_unk_txt("/unknown_cells_txt_vis_array");
 std::string map_topic_unc("/uncertain_cells_vis_array");
 std::string map_topic_unk("/unknown_cells_vis_array");
 std::string map_topic_var("/variance_vis_array");
-double max_range = -1;
+double max_range = 4.0;
 double resolution = 0.1;
 int block_depth = 4;
 double sf2 = 0.1;
 double ell = 0.2;
 double free_resolution = 0.65;
-double ds_resolution = 0.1;
 double free_thresh = 0.3;
 double occupied_thresh = 0.7;
 double min_z = 0;
@@ -68,105 +52,6 @@ float phi_bw = 20.0f * 3.1415926f / 180.0f;
 float tau_var  = 0.01f;
 float tau_info = 0.5f;
 
-// ---------------------------------------------------------------------------
-// Temporal Buffer: aggregate frames from nearly identical poses to
-// average out measurement noise before the map update.
-// ---------------------------------------------------------------------------
-struct TemporalBuffer {
-    tf::Transform T_ref;
-    la3dm::PCLPointCloud accumulated_cloud;
-    int frame_count = 0;
-    bool initialized = false;
-} temp_buffer;
-
-// d_buffer_threshold: flush the buffer when the anisotropic pose distance from
-// T_ref to the new frame exceeds this value.  Must be much smaller than the
-// novelty-weight bandwidth (≈ 0.3–1.0); typical value 0.02.
-double d_buffer_threshold = 0.02;
-
-// buffer_max_frames: flush the buffer after this many frames even if the sensor
-// hasn't moved enough.  Prevents indefinite accumulation when stationary.
-int buffer_max_frames = 10;
-
-// SE(3) Lie Algebra distance for FLS viewpoints (returns distance squared)
-double compute_se3_distance_sq(const tf::Transform& T_diff) {
-    tf::Vector3 t = T_diff.getOrigin();
-    tf::Quaternion q = T_diff.getRotation();
-
-    // Convert rotation to axis-angle to approximate twist ω
-    double angle = q.getAngle();
-    tf::Vector3 axis = q.getAxis();
-    tf::Vector3 omega = axis * angle;
-
-    // For small rotations, log(T_diff) translation is approximately t
-    // Order: x-forward, y-starboard, z-down
-    double w_x = omega.x();
-    double w_y = omega.y();
-    double w_z = omega.z();
-
-    double v_x = t.x();
-    double v_y = t.y();
-    double v_z = t.z();
-
-    double ell_sq = nov_ell * nov_ell;
-
-    // Anisotropic distance according to FLS measurement bounds
-    double dist_sq = w_roll * (w_x * w_x) +
-                     w_pitch_z * ((w_y * w_y) + (v_z * v_z) / ell_sq) +
-                     w_yaw_xy * ((w_z * w_z) + (v_x * v_x) / ell_sq + (v_y * v_y) / ell_sq);
-
-    return dist_sq;
-}
-
-// Downsample a PCL cloud in place using a VoxelGrid filter.
-static void voxelgrid_downsample(const la3dm::PCLPointCloud &in,
-                                 la3dm::PCLPointCloud &out,
-                                 float leaf_size) {
-    la3dm::PCLPointCloud::Ptr in_ptr(new la3dm::PCLPointCloud(in));
-    pcl::VoxelGrid<la3dm::PCLPointType> sor;
-    sor.setInputCloud(in_ptr);
-    sor.setLeafSize(leaf_size, leaf_size, leaf_size);
-    sor.filter(out);
-}
-
-// Flush the temporal buffer: downsample the accumulated cloud (noise averaging),
-// then call map->insert_pointcloud with the buffer's reference pose.
-// Returns true if a map update was issued.
-static bool flush_buffer() {
-    if (!temp_buffer.initialized || temp_buffer.frame_count == 0) return false;
-
-    la3dm::PCLPointCloud avg_cloud;
-    if (ds_resolution > 0.0) {
-        voxelgrid_downsample(temp_buffer.accumulated_cloud, avg_cloud, (float)ds_resolution);
-    } else {
-        avg_cloud = temp_buffer.accumulated_cloud;
-    }
-
-    if (avg_cloud.size() <= 5) return false;
-
-    tf::Vector3 translation = temp_buffer.T_ref.getOrigin();
-    tf::Quaternion orientation = temp_buffer.T_ref.getRotation();
-
-    la3dm::point3f origin;
-    origin.x() = (float)translation.x();
-    origin.y() = (float)translation.y();
-    origin.z() = (float)translation.z();
-
-    tf::Matrix3x3 mat(orientation);
-    tf::Vector3 up = mat.getColumn(2);
-    la3dm::point3f sensor_up(up.x(), up.y(), up.z());
-
-    // Per-voxel information weighting replaces pose-level novelty; pass 1.0.
-    const float w_novelty = 1.0f;
-    map->insert_pointcloud(avg_cloud, origin, sensor_up,
-                           (float)resolution, (float)free_resolution,
-                           (float)max_range, w_novelty);
-
-    ROS_INFO_STREAM("Buffer flushed: " << temp_buffer.frame_count << " frame(s) → "
-                    << avg_cloud.size() << " pts after averaging.");
-    return true;
-}
-
 void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
     tf::StampedTransform transform;
@@ -179,7 +64,6 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
     tf::Vector3 translation = transform.getOrigin();
     tf::Quaternion orientation = transform.getRotation();
-    tf::Transform T_new(orientation, translation);
 
     size_t expected = (size_t)cloud->width * cloud->height * cloud->point_step;
     if (cloud->data.size() < expected) {
@@ -194,72 +78,47 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
     la3dm::PCLPointCloud::Ptr pcl_cloud_world(new la3dm::PCLPointCloud());
     pcl_ros::transformPointCloud(*pcl_cloud_src, *pcl_cloud_world, transform);
 
-    // Temporal buffer — accumulate frames from similar poses for noise
-    // averaging; flush when the pose has moved enough.
-    if (!temp_buffer.initialized) {
-        // First frame: initialise buffer and wait for the next flush trigger.
-        temp_buffer.T_ref = T_new;
-        temp_buffer.accumulated_cloud = *pcl_cloud_world;
-        temp_buffer.frame_count = 1;
-        temp_buffer.initialized = true;
-        ROS_INFO_STREAM("Temporal buffer initialised.");
-        first = false;
+    if (pcl_cloud_world->size() <= 5)
         return;
-    }
 
-    tf::Transform T_rel = temp_buffer.T_ref.inverse() * T_new;
-    double d_sq = compute_se3_distance_sq(T_rel);
-    double d_threshold_sq = d_buffer_threshold * d_buffer_threshold;
+    la3dm::point3f origin;
+    origin.x() = (float)translation.x();
+    origin.y() = (float)translation.y();
+    origin.z() = (float)translation.z();
 
-    if (d_sq < d_threshold_sq && temp_buffer.frame_count < buffer_max_frames) {
-        // Pose is close to reference and below frame cap: accumulate for noise averaging.
-        temp_buffer.accumulated_cloud += *pcl_cloud_world;
-        temp_buffer.frame_count++;
-        ROS_DEBUG_STREAM_THROTTLE(1.0, "Buffer accumulating (frame " << temp_buffer.frame_count
-                                  << ", d=" << std::sqrt(d_sq) << ").");
-        return;
-    }
+    tf::Matrix3x3 mat(orientation);
+    tf::Vector3 up = mat.getColumn(2);
+    la3dm::point3f sensor_up(up.x(), up.y(), up.z());
 
-    // Pose has moved enough: flush the buffer.
     ros::Time start = ros::Time::now();
-    bool map_updated = flush_buffer();
+    map->insert_pointcloud(*pcl_cloud_world, origin, sensor_up,
+                           (float)resolution, (float)free_resolution,
+                           (float)max_range, 1.0f);
+    ros::Time end = ros::Time::now();
+    ROS_INFO_STREAM("Map update finished in " << (end - start).toSec() << "s");
 
-    if (map_updated) {
-        last_position  = temp_buffer.T_ref.getOrigin();
-        last_orientation = temp_buffer.T_ref.getRotation();
-        past_viewpoints.push_back(temp_buffer.T_ref);
-        updated = true;
+    last_position  = translation;
+    last_orientation = orientation;
+    past_viewpoints.push_back(tf::Transform(orientation, translation));
+
+    // Publish viewpoints for visualisation.
+    geometry_msgs::PoseArray pose_array;
+    pose_array.header.frame_id = frame_id;
+    pose_array.header.stamp = ros::Time::now();
+    for (const auto& T : past_viewpoints) {
+        geometry_msgs::Pose pose;
+        pose.position.x = T.getOrigin().x();
+        pose.position.y = T.getOrigin().y();
+        pose.position.z = T.getOrigin().z();
+        pose.orientation.x = T.getRotation().x();
+        pose.orientation.y = T.getRotation().y();
+        pose.orientation.z = T.getRotation().z();
+        pose.orientation.w = T.getRotation().w();
+        pose_array.poses.push_back(pose);
     }
+    viewpoints_pub.publish(pose_array);
 
-    // Start a new buffer window with the current frame.
-    temp_buffer.T_ref = T_new;
-    temp_buffer.accumulated_cloud = *pcl_cloud_world;
-    temp_buffer.frame_count = 1;
-
-    if (map_updated) {
-        ros::Time end = ros::Time::now();
-        ROS_INFO_STREAM("Map update finished in " << (end - start).toSec() << "s");
-
-        // Publish viewpoints for visualisation.
-        geometry_msgs::PoseArray pose_array;
-        pose_array.header.frame_id = frame_id;
-        pose_array.header.stamp = ros::Time::now();
-        for (const auto& T : past_viewpoints) {
-            geometry_msgs::Pose pose;
-            pose.position.x = T.getOrigin().x();
-            pose.position.y = T.getOrigin().y();
-            pose.position.z = T.getOrigin().z();
-            pose.orientation.x = T.getRotation().x();
-            pose.orientation.y = T.getRotation().y();
-            pose.orientation.z = T.getRotation().z();
-            pose.orientation.w = T.getRotation().w();
-            pose_array.poses.push_back(pose);
-        }
-        viewpoints_pub.publish(pose_array);
-    }
-
-    // Publish map visualisation whenever the map was updated.
-    if (updated)
+    // Publish map visualisation.
     {
         ros::Time start2 = ros::Time::now();
 
@@ -403,7 +262,6 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
             }
 
         }
-        updated = false;
 
         m_pub_occ->publish();
         m_pub_free->publish();
@@ -436,7 +294,6 @@ int main(int argc, char **argv) {
     nh.param<double>("sf2", sf2, sf2);
     nh.param<double>("ell", ell, ell);
     nh.param<double>("free_resolution", free_resolution, free_resolution);
-    nh.param<double>("ds_resolution", ds_resolution, ds_resolution);
     nh.param<double>("free_thresh", free_thresh, free_thresh);
     nh.param<double>("occupied_thresh", occupied_thresh, occupied_thresh);
     nh.param<double>("min_z", min_z, min_z);
@@ -444,21 +301,6 @@ int main(int argc, char **argv) {
     nh.param<bool>("original_size", original_size, original_size);
     nh.param<double>("max_var_vis", max_var_vis, max_var_vis);
     nh.param<std::string>("frame_id", frame_id, frame_id);
-
-    // Anisotropic pose-distance parameters
-    nh.param<double>("w_roll",    w_roll,    w_roll);
-    nh.param<double>("w_pitch_z", w_pitch_z, w_pitch_z);
-    nh.param<double>("w_yaw_xy",  w_yaw_xy,  w_yaw_xy);
-    nh.param<double>("nov_ell",   nov_ell,   nov_ell);
-
-    // Legacy novelty-weight parameters (no longer used for frame gating)
-    nh.param<double>("nov_sigma",       nov_sigma,       nov_sigma);
-    nh.param<double>("min_novelty",     min_novelty,     min_novelty);
-    nh.param<double>("nov_dist_thresh", nov_dist_thresh, nov_dist_thresh);
-
-    // Temporal buffer parameters
-    nh.param<double>("d_buffer_threshold", d_buffer_threshold, d_buffer_threshold);
-    nh.param<int>("buffer_max_frames", buffer_max_frames, buffer_max_frames);
 
     //BKGL parameters
     nh.param<float>("var_thresh",  var_thresh,  var_thresh);
@@ -480,19 +322,12 @@ int main(int argc, char **argv) {
             "sf2: " << sf2 << std::endl <<
             "ell: " << ell << std::endl <<
             "free_resolution: " << free_resolution << std::endl <<
-            "ds_resolution: " << ds_resolution << std::endl <<
             "free_thresh: " << free_thresh << std::endl <<
             "occupied_thresh: " << occupied_thresh << std::endl <<
             "min_z: " << min_z << std::endl <<
             "max_z: " << max_z << std::endl <<
             "original_size: " << original_size << std::endl <<
             "max_var_vis: " << max_var_vis << std::endl <<
-            "w_roll: " << w_roll << std::endl <<
-            "w_pitch_z: " << w_pitch_z << std::endl <<
-            "w_yaw_xy: " << w_yaw_xy << std::endl <<
-            "nov_ell: " << nov_ell << std::endl <<
-            "d_buffer_threshold: " << d_buffer_threshold << std::endl <<
-            "buffer_max_frames: " << buffer_max_frames << std::endl <<
             "var_thresh: " << var_thresh << std::endl <<
             "prior_A: " << prior_A << std::endl <<
             "prior_B: " << prior_B << std::endl <<
