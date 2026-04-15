@@ -165,38 +165,41 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
                     }
                 }
             }
-            else if(it.get_node().get_state() == la3dm::State::FREE)
-            {
-                if (original_size)
-                {
-                    m_pub_free->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size(), it.get_node().get_prob());
-                    float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) +
-                                    (p.y() - last_position.y()) * (p.y() - last_position.y()) +
-                                    (p.z() - last_position.z()) * (p.z() - last_position.z());
-                    if (dist_sq < 5.0f) {
-                        char text[50];
-                        snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
-                        m_pub_free_txt->insert_text3d(p.x(), p.y(), p.z(), text, it.get_size());
-                    }
-                }
-                else
-                {
-                    auto pruned = it.get_pruned_locs();
-                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
-                    {
-                        m_pub_free->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution(), it.get_node().get_prob());
-                        float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) +
-                                        (n->y() - last_position.y()) * (n->y() - last_position.y()) +
-                                        (n->z() - last_position.z()) * (n->z() - last_position.z());
-                        if (dist_sq < 5.0f) {
-                            char text[50];
-                            snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
-                            m_pub_free_txt->insert_text3d(n->x(), n->y(), n->z(), text, map->get_resolution());
-                        }
-                    }
-                }
-
-            }
+            // Free-cell visualization commented out: the free-space volume at 40 m sonar
+            // range grows to hundreds of millions of voxels and causes a >1 GB TCPROS
+            // message that crashes RViz and disrupts the ROS bridge.  The map data itself
+            // is unaffected; re-enable here if you need a bounded debug view.
+            // else if(it.get_node().get_state() == la3dm::State::FREE)
+            // {
+            //     if (original_size)
+            //     {
+            //         m_pub_free->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size(), it.get_node().get_prob());
+            //         float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) +
+            //                         (p.y() - last_position.y()) * (p.y() - last_position.y()) +
+            //                         (p.z() - last_position.z()) * (p.z() - last_position.z());
+            //         if (dist_sq < 5.0f) {
+            //             char text[50];
+            //             snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
+            //             m_pub_free_txt->insert_text3d(p.x(), p.y(), p.z(), text, it.get_size());
+            //         }
+            //     }
+            //     else
+            //     {
+            //         auto pruned = it.get_pruned_locs();
+            //         for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
+            //         {
+            //             m_pub_free->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution(), it.get_node().get_prob());
+            //             float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) +
+            //                             (n->y() - last_position.y()) * (n->y() - last_position.y()) +
+            //                             (n->z() - last_position.z()) * (n->z() - last_position.z());
+            //             if (dist_sq < 5.0f) {
+            //                 char text[50];
+            //                 snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
+            //                 m_pub_free_txt->insert_text3d(n->x(), n->y(), n->z(), text, map->get_resolution());
+            //             }
+            //         }
+            //     }
+            // }
             else if(it.get_node().get_state() == la3dm::State::UNCERTAIN)
             {
                 if (original_size)
