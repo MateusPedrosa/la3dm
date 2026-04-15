@@ -393,7 +393,7 @@ namespace la3dm {
                 // Scale peak weight by observation range
                 float peak_weight = baseline_range / (true_dist * true_dist);
 
-                if (peak_weight < 0.05f) peak_weight = 0.05f; // minimum floor
+                // if (peak_weight < 0.05f) peak_weight = 0.05f; // minimum floor
                 
                 xy.emplace_back(point6f(occ_endpt), peak_weight);
                 ray_idx.push_back(-1); // -1 tells the trainer this is an occupied point, not a ray
