@@ -22,7 +22,7 @@ namespace la3dm {
 #ifdef PREDICT
     typedef std::array<BlockHashKey, 27> ExtendedBlock;
 #else
-    typedef std::array<BlockHashKey, 7> ExtendedBlock;
+    typedef std::array<BlockHashKey, 27> ExtendedBlock;
 #endif
 
     /// Convert from block to hash key.

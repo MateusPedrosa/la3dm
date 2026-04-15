@@ -494,10 +494,12 @@ namespace la3dm {
     }
 
     void BGKLOctoMap::get_blocks_in_bbox(const point3f &lim_min, const point3f &lim_max,
-                                       vector<BlockHashKey> &blocks) const {
-        for (float x = lim_min.x() - block_size; x <= lim_max.x() + 2 * block_size; x += block_size) {
-            for (float y = lim_min.y() - block_size; y <= lim_max.y() + 2 * block_size; y += block_size) {
-                for (float z = lim_min.z() - block_size; z <= lim_max.z() + 2 * block_size; z += block_size) {
+                                   vector<BlockHashKey> &blocks) const {
+        // Symmetrical 2-block padding to support wide vertical apertures
+        float pad = 2.0f * block_size; 
+        for (float x = lim_min.x() - pad; x <= lim_max.x() + pad; x += block_size) {
+            for (float y = lim_min.y() - pad; y <= lim_max.y() + pad; y += block_size) {
+                for (float z = lim_min.z() - pad; z <= lim_max.z() + pad; z += block_size) {
                     blocks.push_back(block_to_hash_key(x, y, z));
                 }
             }
