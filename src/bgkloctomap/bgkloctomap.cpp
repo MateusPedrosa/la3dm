@@ -39,10 +39,12 @@ namespace la3dm {
                         float prior_A,
                         float prior_B,
                         float theta_bw,
-                        float phi_bw)
+                        float phi_bw,
+                        bool free_ray_range_weight)
             : resolution(resolution), block_depth(block_depth),
               block_size((float) pow(2, block_depth - 1) * resolution),
-              theta_bw(theta_bw), phi_bw(phi_bw) {
+              theta_bw(theta_bw), phi_bw(phi_bw),
+              free_ray_range_weight(free_ray_range_weight) {
         Block::resolution = resolution;
         Block::size = this->block_size;
         Block::key_loc_map = init_key_loc_map(resolution, block_depth);
@@ -182,7 +184,7 @@ namespace la3dm {
                     block_x.push_back(rays[ray_idx[xy_idx[j]]].first.y1());
                     block_x.push_back(rays[ray_idx[xy_idx[j]]].first.z1());
                     block_y.push_back(0.0f);
-                    block_w.push_back(1.0f); // free space ray gets full evidence weight
+                    block_w.push_back(rays[ray_idx[xy_idx[j]]].second); // range-based weight, same as occupied
                 }
             }
             };
@@ -424,7 +426,8 @@ namespace la3dm {
 
                     point3f free_endpt(origin.x() + nx * l_free, origin.y() + ny * l_free, origin.z() + nz * l_free);
                     point6f line6f(origin, free_endpt);
-                    rays.emplace_back(line6f, 0.0f);
+                    float ray_weight = free_ray_range_weight ? 1.0f / (true_dist * true_dist) : 1.0f;
+                    rays.emplace_back(line6f, ray_weight);
                 }
             }
         }

@@ -60,7 +60,8 @@ namespace la3dm {
                 float prior_A,
                 float prior_B,
                 float theta_bw = 0.6f * 3.14159f / 180.0f,
-                float phi_bw = 20.0f * 3.14159f / 180.0f);
+                float phi_bw = 20.0f * 3.14159f / 180.0f,
+                bool free_ray_range_weight = false);
 
         ~BGKLOctoMap();
 
@@ -386,6 +387,7 @@ namespace la3dm {
         unsigned short block_depth;
         float theta_bw;
         float phi_bw;
+        bool free_ray_range_weight;
         std::unordered_map<BlockHashKey, Block *> block_arr;
         MyRTree rtree;
     };

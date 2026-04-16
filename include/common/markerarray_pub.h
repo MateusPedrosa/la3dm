@@ -215,6 +215,19 @@ namespace la3dm {
             for (size_t i = 0; i < msg->markers.size(); ++i) {
                 msg->markers[i].header.stamp = ros::Time::now();
             }
+
+            // Diagnostic: report size before sending so we can trace gigabyte errors.
+            // Each geometry_msgs/Point = 24 B, each std_msgs/ColorRGBA = 16 B; add ~200 B
+            // per marker for header/strings.
+            size_t total_pts = 0;
+            for (size_t i = 0; i < msg->markers.size(); ++i)
+                total_pts += msg->markers[i].points.size();
+            size_t est_bytes = total_pts * 40 + msg->markers.size() * 200;
+            if (est_bytes > 100 * 1024 * 1024) // log anything > 100 MB
+                ROS_WARN_THROTTLE(5.0, "[MarkerArrayPub] topic='%s'  ~%.0f MB  (%zu pts across %zu markers)",
+                                  topic.c_str(), est_bytes / 1.0e6,
+                                  total_pts, msg->markers.size());
+
             pub.publish(*msg);
         }
 

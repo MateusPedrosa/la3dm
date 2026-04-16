@@ -40,6 +40,7 @@ double min_z = 0;
 double max_z = 0;
 bool original_size = true;
 double max_var_vis = 0.25;
+double max_vis_radius = 40.0; // Visualization sphere radius (m); 0 = unlimited
 
 //BGKL parameters
 float var_thresh = 1.0f;
@@ -47,6 +48,7 @@ float prior_A = 1.0f;
 float prior_B = 1.0f;
 float theta_bw = 0.6f * 3.1415926f / 180.0f;
 float phi_bw = 20.0f * 3.1415926f / 180.0f;
+bool free_ray_range_weight = false;
 
 // Lifecycle (info matrix deallocation) parameters
 float tau_var  = 0.01f;
@@ -131,9 +133,18 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
         m_pub_unk->clear();
         m_pub_var->clear();
 
+        float max_vis_radius_sq = (max_vis_radius > 0) ? (float)(max_vis_radius * max_vis_radius) : -1.0f;
+
         for (auto it = map->begin_leaf(); it != map->end_leaf(); ++it) {
 
             la3dm::point3f p = it.get_loc();
+
+            if (max_vis_radius_sq > 0) {
+                float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) +
+                                (p.y() - last_position.y()) * (p.y() - last_position.y()) +
+                                (p.z() - last_position.z()) * (p.z() - last_position.z());
+                if (dist_sq > max_vis_radius_sq) continue;
+            }
 
             if (it.get_node().get_state() == la3dm::State::OCCUPIED) {
                 if (original_size)
@@ -247,9 +258,26 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
                 }
             }
 
+            // auto state = it.get_node().get_state();
+            // if (state == la3dm::State::OCCUPIED || state == la3dm::State::FREE || state == la3dm::State::UNCERTAIN) {
+            //     std::string ns = (state == la3dm::State::OCCUPIED) ? "occupied" : (state == la3dm::State::FREE) ? "free" : "uncertain";
+            //     if (original_size)
+            //     {
+            //         m_pub_var->insert_color_point3d(p.x(), p.y(), p.z(), 0.0, max_var_vis, it.get_node().get_var(), it.get_size(), ns);
+            //     }
+            //     else
+            //     {
+            //         auto pruned = it.get_pruned_locs();
+            //         for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
+            //         {
+            //             m_pub_var->insert_color_point3d(n->x(), n->y(), n->z(), 0.0, max_var_vis, it.get_node().get_var(), map->get_resolution(), ns);
+            //         }
+            //     }
+            // }
+
             auto state = it.get_node().get_state();
-            if (state == la3dm::State::OCCUPIED || state == la3dm::State::FREE || state == la3dm::State::UNCERTAIN) {
-                std::string ns = (state == la3dm::State::OCCUPIED) ? "occupied" : (state == la3dm::State::FREE) ? "free" : "uncertain";
+            if (state == la3dm::State::OCCUPIED || state == la3dm::State::UNCERTAIN) {
+                std::string ns = (state == la3dm::State::OCCUPIED) ? "occupied" : "uncertain";
                 if (original_size)
                 {
                     m_pub_var->insert_color_point3d(p.x(), p.y(), p.z(), 0.0, max_var_vis, it.get_node().get_var(), it.get_size(), ns);
@@ -303,6 +331,7 @@ int main(int argc, char **argv) {
     nh.param<double>("max_z", max_z, max_z);
     nh.param<bool>("original_size", original_size, original_size);
     nh.param<double>("max_var_vis", max_var_vis, max_var_vis);
+    nh.param<double>("max_vis_radius", max_vis_radius, max_vis_radius);
     nh.param<std::string>("frame_id", frame_id, frame_id);
 
     //BKGL parameters
@@ -311,6 +340,7 @@ int main(int argc, char **argv) {
     nh.param<float>("prior_B",     prior_B,     prior_B);
     nh.param<float>("theta_bw",    theta_bw,    theta_bw);
     nh.param<float>("phi_bw",      phi_bw,      phi_bw);
+    nh.param<bool>("free_ray_range_weight", free_ray_range_weight, free_ray_range_weight);
 
     // Lifecycle (info matrix deallocation) parameters
     nh.param<float>("tau_var",  tau_var,  tau_var);
@@ -331,17 +361,19 @@ int main(int argc, char **argv) {
             "max_z: " << max_z << std::endl <<
             "original_size: " << original_size << std::endl <<
             "max_var_vis: " << max_var_vis << std::endl <<
+            "max_vis_radius: " << max_vis_radius << std::endl <<
             "var_thresh: " << var_thresh << std::endl <<
             "prior_A: " << prior_A << std::endl <<
             "prior_B: " << prior_B << std::endl <<
             "theta_bw: " << theta_bw << std::endl <<
             "phi_bw: " << phi_bw << std::endl <<
             "tau_var: " << tau_var << std::endl <<
-            "tau_info: " << tau_info
+            "tau_info: " << tau_info << std::endl <<
+            "free_ray_range_weight: " << free_ray_range_weight
             );
 
     map = new la3dm::BGKLOctoMap(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh,
-                                  var_thresh, prior_A, prior_B, theta_bw, phi_bw);
+                                  var_thresh, prior_A, prior_B, theta_bw, phi_bw, free_ray_range_weight);
 
     // Set lifecycle thresholds on the voxel class
     la3dm::OcTreeNode::tau_var  = tau_var;
