@@ -41,6 +41,7 @@ double max_z = 0;
 bool original_size = true;
 double max_var_vis = 0.25;
 double max_vis_radius = 40.0; // Visualization sphere radius (m); 0 = unlimited
+double viz_rate = 1.5;        // Visualization publish rate (Hz); decoupled from sonar callback
 
 //BGKL parameters
 float var_thresh = 1.0f;
@@ -102,25 +103,35 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
     last_position  = translation;
     last_orientation = orientation;
     past_viewpoints.push_back(tf::Transform(orientation, translation));
+}
 
-    // Publish viewpoints for visualisation.
-    geometry_msgs::PoseArray pose_array;
-    pose_array.header.frame_id = frame_id;
-    pose_array.header.stamp = ros::Time::now();
-    for (const auto& T : past_viewpoints) {
-        geometry_msgs::Pose pose;
-        pose.position.x = T.getOrigin().x();
-        pose.position.y = T.getOrigin().y();
-        pose.position.z = T.getOrigin().z();
-        pose.orientation.x = T.getRotation().x();
-        pose.orientation.y = T.getRotation().y();
-        pose.orientation.z = T.getRotation().z();
-        pose.orientation.w = T.getRotation().w();
-        pose_array.poses.push_back(pose);
+// Periodic visualization: walks the full map + republishes viewpoints.
+// Runs on a ros::Timer decoupled from the sonar callback so map updates
+// stay at sonar rate even as the map grows and the viz loop becomes heavy.
+void publishMapVisualization(const ros::TimerEvent&) {
+    if (map == nullptr) return;
+
+    // ---- Viewpoints ----
+    {
+        geometry_msgs::PoseArray pose_array;
+        pose_array.header.frame_id = frame_id;
+        pose_array.header.stamp = ros::Time::now();
+        pose_array.poses.reserve(past_viewpoints.size());
+        for (const auto& T : past_viewpoints) {
+            geometry_msgs::Pose pose;
+            pose.position.x = T.getOrigin().x();
+            pose.position.y = T.getOrigin().y();
+            pose.position.z = T.getOrigin().z();
+            pose.orientation.x = T.getRotation().x();
+            pose.orientation.y = T.getRotation().y();
+            pose.orientation.z = T.getRotation().z();
+            pose.orientation.w = T.getRotation().w();
+            pose_array.poses.push_back(pose);
+        }
+        viewpoints_pub.publish(pose_array);
     }
-    viewpoints_pub.publish(pose_array);
 
-    // Publish map visualisation.
+    // ---- Map visualisation ----
     {
         ros::Time start2 = ros::Time::now();
 
@@ -332,6 +343,7 @@ int main(int argc, char **argv) {
     nh.param<bool>("original_size", original_size, original_size);
     nh.param<double>("max_var_vis", max_var_vis, max_var_vis);
     nh.param<double>("max_vis_radius", max_vis_radius, max_vis_radius);
+    nh.param<double>("viz_rate", viz_rate, viz_rate);
     nh.param<std::string>("frame_id", frame_id, frame_id);
 
     //BKGL parameters
@@ -362,6 +374,7 @@ int main(int argc, char **argv) {
             "original_size: " << original_size << std::endl <<
             "max_var_vis: " << max_var_vis << std::endl <<
             "max_vis_radius: " << max_vis_radius << std::endl <<
+            "viz_rate: " << viz_rate << std::endl <<
             "var_thresh: " << var_thresh << std::endl <<
             "prior_A: " << prior_A << std::endl <<
             "prior_B: " << prior_B << std::endl <<
@@ -392,6 +405,15 @@ int main(int argc, char **argv) {
     viewpoints_pub = nh.advertise<geometry_msgs::PoseArray>("viewpoints", 1, true);
 
     listener = new tf::TransformListener();
+
+    // Decouple visualization from the sonar callback: run it on its own timer
+    // so map updates stay at sonar rate even when the viz pass becomes heavy.
+    ros::Timer viz_timer;
+    if (viz_rate > 0.0) {
+        viz_timer = nh.createTimer(ros::Duration(1.0 / viz_rate), publishMapVisualization);
+    } else {
+        ROS_WARN("viz_rate <= 0: map visualization disabled.");
+    }
 
     while(ros::ok())
     {

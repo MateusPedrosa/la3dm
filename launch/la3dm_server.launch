@@ -13,13 +13,19 @@
     <arg name="method" default="bgklvoctomap"/>
     <arg name="method_config" value="$(find la3dm)/config/methods"/>
 
+    <!-- Visualization publish rate (Hz). Decoupled from the sonar callback so map
+         updates stay at sonar rate. Set to 0 to disable viz entirely. -->
+    <arg name="viz_rate" default="1.5"/>
+
     <!--Start the LA3DM node -->
     <!-- <node pkg="la3dm" type="$(arg method)_server" name="la3dm_server" launch-prefix="gdb -ex run -_-args" output="screen"> -->
     <node pkg="la3dm" type="$(arg method)_server" name="la3dm_server" output="screen">
 
         <!-- Load method configuration from file -->
         <rosparam file="$(arg method_config)/$(arg method)_large_map.yaml" command="load"/>
-        
+
+        <param name="viz_rate" value="$(arg viz_rate)"/>
+
     </node>
 
 </launch>
