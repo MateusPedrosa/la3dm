@@ -95,7 +95,7 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
     ros::Time start = ros::Time::now();
     map->insert_pointcloud(*pcl_cloud_world, origin, sensor_up,
                            (float)resolution, (float)free_resolution,
-                           (float)max_range, 1.0f);
+                           (float)max_range);
     ros::Time end = ros::Time::now();
     ROS_INFO_STREAM("Map update finished in " << (end - start).toSec() << "s");
 

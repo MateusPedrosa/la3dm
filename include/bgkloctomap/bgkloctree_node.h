@@ -100,16 +100,16 @@ namespace la3dm {
         }
 
         /*
-         * @brief Compute per-voxel evidence weight for a new observation.
+         * @brief Compute per-voxel novelty weight for a new observation.
          *
-         * w_voxel = 1 - (nᵀ I(p) n) / (λ_max_cache + ε)
+         * w_novelty = 1 - (nᵀ I(p) n) / (λ_max_cache + ε)
          *
          * Returns 1.0 for new voxels (zero info matrix → full evidence weight).
          * Returns 0.0 if voxel is marked as well-constrained (info_constrained).
          *
          * @param n  Unit constraint direction vector in world frame.
          */
-        inline float compute_w_voxel(const point3f &n) const {
+        inline float compute_w_novelty(const point3f &n) const {
             if (info_constrained) return 0.0f;
             float nIn = info[0]*n.x()*n.x() + info[3]*n.y()*n.y() + info[5]*n.z()*n.z()
                       + 2.0f*info[1]*n.x()*n.y() + 2.0f*info[2]*n.x()*n.z()
@@ -124,7 +124,7 @@ namespace la3dm {
          * I(p) ← I(p) + w_range · n nᵀ
          * lambda_max_cache ← trace(I)  (upper bound on λ_max)
          *
-         * Uses w_range only (NOT w_voxel) to avoid circular feedback.
+         * Uses w_range only (NOT w_novelty) to avoid circular feedback.
          * No-op if voxel is marked as well-constrained.
          *
          * @param n       Unit constraint direction vector in world frame.
@@ -145,7 +145,7 @@ namespace la3dm {
          * @brief Lifecycle management: mark voxel as well-constrained when
          *        Beta variance < tau_var AND λ_min(I) > tau_info.
          *
-         * Once marked, compute_w_voxel returns 0 and update_info_matrix is a no-op,
+         * Once marked, compute_w_novelty returns 0 and update_info_matrix is a no-op,
          * preventing further evidence accumulation in already-constrained voxels.
          */
         void check_deallocation();

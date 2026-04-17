@@ -88,7 +88,7 @@ namespace la3dm {
     void BGKLOctoMap::insert_pointcloud(const PCLPointCloud &cloud, const point3f &origin,
                                       const point3f &sensor_up,
                                       float ds_resolution,
-                                      float free_res, float max_range, float w_novelty) {
+                                      float free_res, float max_range) {
 
 #ifdef DEBUG
         Debug_Msg("Insert pointcloud: " << "cloud size: " << cloud.size() << " origin: " << origin);
@@ -189,7 +189,7 @@ namespace la3dm {
             }
             };
             // std::cout << "number of training blocks" << block_y.size() << std::endl;
-            BGKL3f *bgkl = new BGKL3f(OcTreeNode::sf2, OcTreeNode::ell, theta_bw, phi_bw, w_novelty);
+            BGKL3f *bgkl = new BGKL3f(OcTreeNode::sf2, OcTreeNode::ell, theta_bw, phi_bw);
             bgkl->train(block_x, block_y, block_w);
 #ifdef OPENMP
 #pragma omp critical
@@ -265,22 +265,22 @@ namespace la3dm {
                         }
 
                         if (valid_n) {
-                            // ---- Per-voxel evidence weight ----
-                            // w_voxel = 1 - (nᵀ I n) / (λ_max_cache + ε)
-                            float w_voxel = node.compute_w_voxel(n_vec);
+                            // ---- Per-voxel novelty weight ----
+                            // w_novelty = 1 - (nᵀ I n) / (λ_max_cache + ε)
+                            float w_novelty = node.compute_w_novelty(n_vec);
 
                             // ---- Rank-1 information matrix update ----
-                            // I(p) += w_range · n nᵀ  (uses w_range only, NOT w_voxel)
+                            // I(p) += w_range · n nᵀ  (uses w_range only, NOT w_novelty)
                             // Matches training-data formula: w_range ≈ 1/r², floored at 0.05
                             float w_range = 1.0f / (obs_range * obs_range + 1.0f);
                             if (w_range < 0.05f) w_range = 0.05f;
                             node.update_info_matrix(n_vec, w_range);
 
-                            // ---- Beta update with w_total = w_range_baked * w_voxel ----
+                            // ---- Beta update with w_total = w_range_baked * w_novelty ----
                             // ybar/kbar already encode w_range (training-data peak_weight).
-                            // Scaling by w_voxel gives the combined novelty-weighted evidence.
-                            if (w_voxel > 1e-8f)
-                                node.update(ybar[j] * w_voxel, kbar[j] * w_voxel, obs_range);
+                            // Scaling by w_novelty gives the combined novelty-weighted evidence.
+                            if (w_novelty > 1e-8f)
+                                node.update(ybar[j] * w_novelty, kbar[j] * w_novelty, obs_range);
 
                             // ---- Lifecycle management ----
                             node.check_deallocation();

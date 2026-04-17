@@ -21,8 +21,8 @@ namespace la3dm {
 
         float EPSILON = 0.0001;
 
-        BGKLInference(T sf2, T ell, T theta_bw = 0.6f * 3.14159f / 180.0f, T phi_bw = 20.0f * 3.14159f / 180.0f, T w_novelty = 1.0f) 
-            : sf2(sf2), ell(ell), theta_bw(theta_bw), phi_bw(phi_bw), w_novelty(w_novelty), trained(false) { }
+        BGKLInference(T sf2, T ell, T theta_bw = 0.6f * 3.14159f / 180.0f, T phi_bw = 20.0f * 3.14159f / 180.0f)
+            : sf2(sf2), ell(ell), theta_bw(theta_bw), phi_bw(phi_bw), trained(false) { }
 
         /*
          * @brief Fit BGK Model
@@ -285,7 +285,7 @@ namespace la3dm {
                         if (k_radial < 0.0f) k_radial = 0.0f;
                     }
                     
-                    Kxz(i, j) = k_radial * w_angular * w_novelty;
+                    Kxz(i, j) = k_radial * w_angular;
                 }
             }
         }
@@ -294,7 +294,6 @@ namespace la3dm {
         T ell;    // length-scale
         T theta_bw; // vertical beamwidth
         T phi_bw;   // horizontal beamwidth
-        T w_novelty; // novelty weight to scale evidence
 
         MatrixXType x;   // temporary storage of training data
         MatrixYType y;   // temporary storage of training labels
