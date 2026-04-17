@@ -146,7 +146,18 @@ void publishMapVisualization(const ros::TimerEvent&) {
 
         float max_vis_radius_sq = (max_vis_radius > 0) ? (float)(max_vis_radius * max_vis_radius) : -1.0f;
 
-        for (auto it = map->begin_leaf(); it != map->end_leaf(); ++it) {
+        // Block-level bbox gating: when max_vis_radius is set, only iterate
+        // leaves in blocks whose center is within the visualization sphere
+        // (plus a block-half-diagonal safety margin). Drops per-tick cost from
+        // O(total map) to O(visible blocks). Per-leaf radius check below still
+        // catches leaves at block edges that fall outside the sphere.
+        la3dm::point3f viz_center(
+            (float)last_position.x(), (float)last_position.y(), (float)last_position.z());
+        auto leaf_begin = (max_vis_radius > 0)
+            ? map->begin_leaf_in_sphere(viz_center, (float)max_vis_radius)
+            : map->begin_leaf();
+
+        for (auto it = leaf_begin; it != map->end_leaf(); ++it) {
 
             la3dm::point3f p = it.get_loc();
 

@@ -240,6 +240,29 @@ namespace la3dm {
                 }
             }
 
+            // Spatial-filter constructor: only walks leaves of blocks whose
+            // center is within `radius + block_half_diagonal` of `center`.
+            // The half-diagonal padding (sqrt(3)/2 * block_size) guarantees no
+            // voxel that would have passed a per-leaf radius check is skipped.
+            LeafIterator(const BGKLOctoMap *map, const point3f &center, float radius)
+                    : filter_active(true), filter_center(center) {
+                assert(map != nullptr);
+                float padded = radius + 0.866025404f * map->block_size;
+                block_threshold_sq = padded * padded;
+
+                block_it = map->block_arr.cbegin();
+                end_block = map->block_arr.cend();
+                advance_past_filtered_blocks();
+
+                if (block_it != end_block) {
+                    leaf_it = block_it->second->begin_leaf();
+                    end_leaf = block_it->second->end_leaf();
+                } else {
+                    leaf_it = OcTree::LeafIterator();
+                    end_leaf = OcTree::LeafIterator();
+                }
+            }
+
             // just for initializing end iterator
             LeafIterator(std::unordered_map<BlockHashKey, Block *>::const_iterator block_it,
                          OcTree::LeafIterator leaf_it)
@@ -263,12 +286,28 @@ namespace la3dm {
                 ++leaf_it;
                 if (leaf_it == end_leaf) {
                     ++block_it;
+                    advance_past_filtered_blocks();
                     if (block_it != end_block) {
                         leaf_it = block_it->second->begin_leaf();
                         end_leaf = block_it->second->end_leaf();
                     }
                 }
                 return *this;
+            }
+
+            // No-op unless the spatial-filter constructor was used. Advances
+            // block_it past any block whose center-to-filter_center squared
+            // distance exceeds block_threshold_sq.
+            void advance_past_filtered_blocks() {
+                if (!filter_active) return;
+                while (block_it != end_block) {
+                    point3f c = block_it->second->get_center();
+                    float dx = c.x() - filter_center.x();
+                    float dy = c.y() - filter_center.y();
+                    float dz = c.z() - filter_center.z();
+                    if (dx*dx + dy*dy + dz*dz <= block_threshold_sq) return;
+                    ++block_it;
+                }
             }
 
             OcTreeNode &operator*() const {
@@ -313,10 +352,25 @@ namespace la3dm {
 
             OcTree::LeafIterator leaf_it;
             OcTree::LeafIterator end_leaf;
+
+            // Optional spatial filter (active only when constructed with a
+            // center+radius). Default-initialised so the other constructors
+            // leave filtering disabled.
+            bool filter_active = false;
+            point3f filter_center;
+            float block_threshold_sq = 0.0f;
         };
 
         /// @return the beginning of leaf iterator
         inline LeafIterator begin_leaf() const { return LeafIterator(this); }
+
+        /// @return a leaf iterator restricted to blocks whose center is within
+        ///         `radius + block_half_diagonal` of `center`. Use with the
+        ///         unchanged `end_leaf()` sentinel. Falls back to full walk if
+        ///         you pass a radius large enough to enclose the map.
+        inline LeafIterator begin_leaf_in_sphere(const point3f &center, float radius) const {
+            return LeafIterator(this, center, radius);
+        }
 
         /// @return the end of leaf iterator
         inline LeafIterator end_leaf() const { return LeafIterator(block_arr.cend(), OcTree::LeafIterator()); }
