@@ -172,14 +172,14 @@ void publishMapVisualization(const ros::TimerEvent&) {
                 if (original_size)
                 {
                     m_pub_occ->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size());
-                    float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) +
-                                    (p.y() - last_position.y()) * (p.y() - last_position.y()) +
-                                    (p.z() - last_position.z()) * (p.z() - last_position.z());
-                    if (dist_sq < 5.0f) {
-                        char text[50];
-                        snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
-                        m_pub_occ_txt->insert_text3d(p.x(), p.y(), p.z(), text, it.get_size());
-                    }
+                    // float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) +
+                    //                 (p.y() - last_position.y()) * (p.y() - last_position.y()) +
+                    //                 (p.z() - last_position.z()) * (p.z() - last_position.z());
+                    // if (dist_sq < 5.0f) {
+                    //     char text[50];
+                    //     snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
+                    //     m_pub_occ_txt->insert_text3d(p.x(), p.y(), p.z(), text, it.get_size());
+                    // }
                 }
                 else
                 {
@@ -187,14 +187,14 @@ void publishMapVisualization(const ros::TimerEvent&) {
                     for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
                     {
                         m_pub_occ->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution());
-                        float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) +
-                                        (n->y() - last_position.y()) * (n->y() - last_position.y()) +
-                                        (n->z() - last_position.z()) * (n->z() - last_position.z());
-                        if (dist_sq < 5.0f) {
-                            char text[50];
-                            snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
-                            m_pub_occ_txt->insert_text3d(n->x(), n->y(), n->z(), text, map->get_resolution());
-                        }
+                    //     float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) +
+                    //                     (n->y() - last_position.y()) * (n->y() - last_position.y()) +
+                    //                     (n->z() - last_position.z()) * (n->z() - last_position.z());
+                    //     if (dist_sq < 5.0f) {
+                    //         char text[50];
+                    //         snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
+                    //         m_pub_occ_txt->insert_text3d(n->x(), n->y(), n->z(), text, map->get_resolution());
+                    //     }
                     }
                 }
             }
@@ -248,37 +248,37 @@ void publishMapVisualization(const ros::TimerEvent&) {
                     }
                 }
             }
-            else if(it.get_node().get_state() == la3dm::State::UNKNOWN)
-            {
-                if (original_size)
-                {
-                    m_pub_unk->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size());
-                    float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) +
-                                    (p.y() - last_position.y()) * (p.y() - last_position.y()) +
-                                    (p.z() - last_position.z()) * (p.z() - last_position.z());
-                    if (dist_sq < 15.0f) {
-                        char text[50];
-                        snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
-                        m_pub_unk_txt->insert_text3d(p.x(), p.y(), p.z(), text, it.get_size());
-                    }
-                }
-                else
-                {
-                    auto pruned = it.get_pruned_locs();
-                    for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
-                    {
-                        m_pub_unk->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution());
-                        float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) +
-                                        (n->y() - last_position.y()) * (n->y() - last_position.y()) +
-                                        (n->z() - last_position.z()) * (n->z() - last_position.z());
-                        if (dist_sq < 15.0f) {
-                            char text[50];
-                            snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
-                            m_pub_unk_txt->insert_text3d(n->x(), n->y(), n->z(), text, map->get_resolution());
-                        }
-                    }
-                }
-            }
+            // else if(it.get_node().get_state() == la3dm::State::UNKNOWN)
+            // {
+            //     if (original_size)
+            //     {
+            //         m_pub_unk->insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size());
+            //         float dist_sq = (p.x() - last_position.x()) * (p.x() - last_position.x()) +
+            //                         (p.y() - last_position.y()) * (p.y() - last_position.y()) +
+            //                         (p.z() - last_position.z()) * (p.z() - last_position.z());
+            //         if (dist_sq < 15.0f) {
+            //             char text[50];
+            //             snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
+            //             m_pub_unk_txt->insert_text3d(p.x(), p.y(), p.z(), text, it.get_size());
+            //         }
+            //     }
+            //     else
+            //     {
+            //         auto pruned = it.get_pruned_locs();
+            //         for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
+            //         {
+            //             m_pub_unk->insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map->get_resolution());
+            //             float dist_sq = (n->x() - last_position.x()) * (n->x() - last_position.x()) +
+            //                             (n->y() - last_position.y()) * (n->y() - last_position.y()) +
+            //                             (n->z() - last_position.z()) * (n->z() - last_position.z());
+            //             if (dist_sq < 15.0f) {
+            //                 char text[50];
+            //                 snprintf(text, sizeof(text), "A:%.2f B:%.2f", it.get_node().get_A(), it.get_node().get_B());
+            //                 m_pub_unk_txt->insert_text3d(n->x(), n->y(), n->z(), text, map->get_resolution());
+            //             }
+            //         }
+            //     }
+            // }
 
             // auto state = it.get_node().get_state();
             // if (state == la3dm::State::OCCUPIED || state == la3dm::State::FREE || state == la3dm::State::UNCERTAIN) {
