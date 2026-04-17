@@ -19,6 +19,11 @@ tf::Vector3 last_position;
 tf::Quaternion last_orientation;
 std::vector<tf::Transform> past_viewpoints;
 
+// Cached viewpoint message, appended to on each new sonar frame.
+// Published on change (from cloudHandler) — the topic is latched so new
+// subscribers still receive the full history without periodic republishing.
+geometry_msgs::PoseArray viewpoints_msg;
+
 //Universal parameters
 std::string map_topic_occ("/occupied_cells_vis_array");
 std::string map_topic_free("/free_cells_vis_array");
@@ -103,33 +108,30 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
     last_position  = translation;
     last_orientation = orientation;
     past_viewpoints.push_back(tf::Transform(orientation, translation));
+
+    // Publish viewpoints on change: append one pose to the cached message and republish
+    {
+        geometry_msgs::Pose pose;
+        pose.position.x = translation.x();
+        pose.position.y = translation.y();
+        pose.position.z = translation.z();
+        pose.orientation.x = orientation.x();
+        pose.orientation.y = orientation.y();
+        pose.orientation.z = orientation.z();
+        pose.orientation.w = orientation.w();
+        viewpoints_msg.poses.push_back(pose);
+        viewpoints_msg.header.frame_id = frame_id;
+        viewpoints_msg.header.stamp = ros::Time::now();
+        viewpoints_pub.publish(viewpoints_msg);
+    }
 }
 
-// Periodic visualization: walks the full map + republishes viewpoints.
+// Periodic map visualization. Viewpoints are published separately from
+// cloudHandler (on change), so this timer only drives the map marker refresh.
 // Runs on a ros::Timer decoupled from the sonar callback so map updates
 // stay at sonar rate even as the map grows and the viz loop becomes heavy.
 void publishMapVisualization(const ros::TimerEvent&) {
     if (map == nullptr) return;
-
-    // ---- Viewpoints ----
-    {
-        geometry_msgs::PoseArray pose_array;
-        pose_array.header.frame_id = frame_id;
-        pose_array.header.stamp = ros::Time::now();
-        pose_array.poses.reserve(past_viewpoints.size());
-        for (const auto& T : past_viewpoints) {
-            geometry_msgs::Pose pose;
-            pose.position.x = T.getOrigin().x();
-            pose.position.y = T.getOrigin().y();
-            pose.position.z = T.getOrigin().z();
-            pose.orientation.x = T.getRotation().x();
-            pose.orientation.y = T.getRotation().y();
-            pose.orientation.z = T.getRotation().z();
-            pose.orientation.w = T.getRotation().w();
-            pose_array.poses.push_back(pose);
-        }
-        viewpoints_pub.publish(pose_array);
-    }
 
     // ---- Map visualisation ----
     {
