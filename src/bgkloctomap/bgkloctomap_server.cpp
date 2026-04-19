@@ -1,5 +1,6 @@
 #include <string>
 #include <iostream>
+#include <unordered_set>
 #include <ros/ros.h>
 #include <pcl_ros/transforms.h>
 #include <geometry_msgs/PoseArray.h>
@@ -10,7 +11,7 @@ tf::TransformListener *listener;
 std::string frame_id("/odom");
 la3dm::BGKLOctoMap *map;
 
-la3dm::MarkerArrayPub *m_pub_occ, *m_pub_free, *m_pub_unc, *m_pub_unk, *m_pub_var;
+la3dm::MarkerArrayPub *m_pub_occ, *m_pub_free, *m_pub_unc, *m_pub_unk, *m_pub_var, *m_pub_occ_coarse;
 la3dm::TextMarkerArrayPub *m_pub_free_txt, *m_pub_occ_txt, *m_pub_unk_txt;
 ros::Publisher viewpoints_pub;
 
@@ -26,6 +27,8 @@ geometry_msgs::PoseArray viewpoints_msg;
 
 //Universal parameters
 std::string map_topic_occ("/occupied_cells_vis_array");
+std::string map_topic_occ_coarse("/occupied_cells_coarse_vis_array");
+int coarse_depth_steps = 2;   // coarse voxel side = resolution * 2^coarse_depth_steps
 std::string map_topic_free("/free_cells_vis_array");
 std::string map_topic_free_txt("/free_cells_txt_vis_array");
 std::string map_topic_occ_txt("/occupied_cells_txt_vis_array");
@@ -138,6 +141,7 @@ void publishMapVisualization(const ros::TimerEvent&) {
         ros::Time start2 = ros::Time::now();
 
         m_pub_occ->clear();
+        m_pub_occ_coarse->clear();
         m_pub_free->clear();
         m_pub_free_txt->clear();
         m_pub_occ_txt->clear();
@@ -158,6 +162,9 @@ void publishMapVisualization(const ros::TimerEvent&) {
         auto leaf_begin = (max_vis_radius > 0)
             ? map->begin_leaf_in_sphere(viz_center, (float)max_vis_radius)
             : map->begin_leaf();
+
+        float coarse_size = (float)resolution * (float)(1 << coarse_depth_steps);
+        std::unordered_set<int64_t> seen_coarse;
 
         for (auto it = leaf_begin; it != map->end_leaf(); ++it) {
 
@@ -198,6 +205,19 @@ void publishMapVisualization(const ros::TimerEvent&) {
                     //         m_pub_occ_txt->insert_text3d(n->x(), n->y(), n->z(), text, map->get_resolution());
                     //     }
                     }
+                }
+                // Coarse voxel: snap to inflated grid for path-planner safety margin
+                int ix = (int)std::floor(p.x() / coarse_size);
+                int iy = (int)std::floor(p.y() / coarse_size);
+                int iz = (int)std::floor(p.z() / coarse_size);
+                int64_t key = ((int64_t)(ix & 0xFFFFF) << 40)
+                            | ((int64_t)(iy & 0xFFFFF) << 20)
+                            |  (int64_t)(iz & 0xFFFFF);
+                if (seen_coarse.insert(key).second) {
+                    float cx = (ix + 0.5f) * coarse_size;
+                    float cy = (iy + 0.5f) * coarse_size;
+                    float cz = (iz + 0.5f) * coarse_size;
+                    m_pub_occ_coarse->insert_point3d(cx, cy, cz, min_z, max_z, coarse_size);
                 }
             }
             // Free-cell visualization commented out: the free-space volume at 40 m sonar
@@ -319,6 +339,7 @@ void publishMapVisualization(const ros::TimerEvent&) {
         }
 
         m_pub_occ->publish();
+        m_pub_occ_coarse->publish();
         m_pub_free->publish();
         m_pub_free_txt->publish();
         m_pub_occ_txt->publish();
@@ -358,6 +379,8 @@ int main(int argc, char **argv) {
     nh.param<double>("max_vis_radius", max_vis_radius, max_vis_radius);
     nh.param<double>("viz_rate", viz_rate, viz_rate);
     nh.param<std::string>("frame_id", frame_id, frame_id);
+    nh.param<std::string>("topic_occ_coarse", map_topic_occ_coarse, map_topic_occ_coarse);
+    nh.param<int>("coarse_depth_steps", coarse_depth_steps, coarse_depth_steps);
 
     //BKGL parameters
     nh.param<float>("var_thresh",  var_thresh,  var_thresh);
@@ -395,7 +418,8 @@ int main(int argc, char **argv) {
             "phi_bw: " << phi_bw << std::endl <<
             "tau_var: " << tau_var << std::endl <<
             "tau_info: " << tau_info << std::endl <<
-            "free_ray_range_weight: " << free_ray_range_weight
+            "free_ray_range_weight: " << free_ray_range_weight << std::endl <<
+            "coarse_depth_steps: " << coarse_depth_steps
             );
 
     map = new la3dm::BGKLOctoMap(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh,
@@ -407,6 +431,7 @@ int main(int argc, char **argv) {
 
     ros::Subscriber point_sub = nh.subscribe<sensor_msgs::PointCloud2>(cloud_topic, 1, cloudHandler);
     m_pub_occ = new la3dm::MarkerArrayPub(nh, map_topic_occ, resolution, {"map"}, frame_id);
+    m_pub_occ_coarse = new la3dm::MarkerArrayPub(nh, map_topic_occ_coarse, resolution, {"map"}, frame_id);
     m_pub_free = new la3dm::MarkerArrayPub(nh, map_topic_free, resolution, {"map"}, frame_id);
     m_pub_free_txt = new la3dm::TextMarkerArrayPub(nh, map_topic_free_txt, resolution, frame_id);
     m_pub_occ_txt = new la3dm::TextMarkerArrayPub(nh, map_topic_occ_txt, resolution, frame_id);

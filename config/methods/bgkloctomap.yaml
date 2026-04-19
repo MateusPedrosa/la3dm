@@ -23,3 +23,7 @@ occupied_thresh: 0.7
 prior_A: 0.001 # Positive class (occupied)
 prior_B: 0.001 # Negative class (unoccupied)
 var_thresh: 0.15 # Threshold on variance to distinguish known/unknown
+
+# Coarse occupied-voxel visualization for path-planner safety margin
+# Publishes to /occupied_cells_coarse_vis_array with voxel side = resolution * 2^N
+coarse_depth_steps: 2  # default: 4x voxel (0.4 m at 0.1 m resolution)

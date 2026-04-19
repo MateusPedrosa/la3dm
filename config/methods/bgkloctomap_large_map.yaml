@@ -4,9 +4,9 @@ frame_id: map
 
 # Map topic, grid cell mininum resolution
 topic: /occupied_cells_vis_array
-resolution: 0.1
+resolution: 0.2
 block_depth: 5 # Test-data octree depth (see Wang & Englot ICRA 2016)
-max_range: 40 # Sensor max range (m)
+max_range: 20 # Sensor max range (m)
 max_vis_radius: 40.0 # Visualization sphere radius around the robot (m); 0 = unlimited
 original_size: true 
 
@@ -31,4 +31,6 @@ prior_A: 0.001 # Positive class (occupied)
 prior_B: 0.001 # Negative class (unoccupied)
 var_thresh: 100.0 # Threshold on variance to distinguish known/unknown
 
-
+# Coarse occupied-voxel visualization for path-planner safety margin
+# Publishes to /occupied_cells_coarse_vis_array with voxel side = resolution * 2^N
+coarse_depth_steps: 1
