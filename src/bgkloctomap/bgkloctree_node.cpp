@@ -76,72 +76,89 @@ namespace la3dm {
     // Per-voxel information matrix lifecycle management
     // ---------------------------------------------------------------------------
 
-    // Compute the minimum eigenvalue of a 3x3 symmetric matrix stored as upper
-    // triangle [Ixx, Ixy, Ixz, Iyy, Iyz, Izz].
+    // Project the 3×3 information matrix I (upper-triangle [Ixx,Ixy,Ixz,Iyy,Iyz,Izz])
+    // onto the 2D plane ⊥ los, then analytically decompose the resulting 2×2 symmetric
+    // matrix to obtain eigenvalues and the weak eigenvector.
     //
-    // Uses the analytical algorithm from Smith (1961) as described at:
-    // https://en.wikipedia.org/wiki/Eigenvalue_algorithm#3%C3%973_matrices
-    //
-    // Only called when both fast pre-filters pass (lambda_max_cache and variance),
-    // so it does not need to be on the hot path.
-    static float compute_min_eigenvalue_3x3(const float I[6]) {
-        // Matrix: [[a,b,c],[b,d,e],[c,e,f]]
-        const float a = I[0], b = I[1], c = I[2];
-        const float d = I[3], e = I[4];
-        const float f = I[5];
+    // The los-direction nullspace of I (always near-zero eigenvalue) is thus discarded,
+    // and only the 2D subspace that carries planning-relevant information is examined.
+    // This matches §4–§5 of the NBV Planner Implementation Specification.
+    static void compute_2d_eigenstruct_impl(
+            const float I[6], const point3f &los,
+            float &lam1, float &lam2, point3f &v_weak)
+    {
+        // --- Build orthonormal basis (e1, e2) for the plane ⊥ los ---
+        // Numerically stable: fall back to world_x when los is nearly vertical.
+        point3f world_z(0.0f, 0.0f, 1.0f);
+        point3f world_x(1.0f, 0.0f, 0.0f);
+        point3f e1;
+        if (std::fabs(los.dot(world_z)) < 0.9f)
+            e1 = los.cross(world_z);
+        else
+            e1 = los.cross(world_x);
+        float e1_norm = (float)e1.norm();
+        if (e1_norm < 1e-8f) { e1 = world_x; e1_norm = 1.0f; }
+        e1 *= (1.0f / e1_norm);
+        point3f e2 = los.cross(e1);  // already unit: los⊥e1, both unit
 
-        float p1 = b*b + c*c + e*e;  // sum of squared off-diagonal elements
+        // --- Project 3×3 onto {e1, e2} to get 2×2 matrix [a, b; b, c] ---
+        // I_2d[i,j] = ei^T * I * ej  (I symmetric, stored as upper triangle)
+        auto quadform = [&](const point3f &u, const point3f &v) -> float {
+            // u^T * I * v  for symmetric I stored as [Ixx,Ixy,Ixz,Iyy,Iyz,Izz]
+            float Iv_x = I[0]*v.x() + I[1]*v.y() + I[2]*v.z();
+            float Iv_y = I[1]*v.x() + I[3]*v.y() + I[4]*v.z();
+            float Iv_z = I[2]*v.x() + I[4]*v.y() + I[5]*v.z();
+            return u.x()*Iv_x + u.y()*Iv_y + u.z()*Iv_z;
+        };
+        float a = quadform(e1, e1);
+        float b = quadform(e1, e2);
+        float c = quadform(e2, e2);
 
-        if (p1 < 1e-12f) {
-            // Diagonal matrix; eigenvalues are the diagonal elements
-            return std::min({a, d, f});
+        // --- Analytical eigendecomposition of symmetric 2×2 [[a,b],[b,c]] ---
+        float mean  = (a + c) * 0.5f;
+        float half  = (a - c) * 0.5f;
+        float delta = std::sqrt(half * half + b * b);
+        lam1 = mean + delta;   // dominant eigenvalue
+        lam2 = mean - delta;   // weak eigenvalue (lam2 <= lam1)
+
+        // --- Weak eigenvector in world frame ---
+        // Eigenvector for lam2: [b, lam2-a] in the (e1,e2) basis.
+        // Special case: I_2d ≈ 0 → completely unobserved, any direction is weak.
+        float vx, vy;
+        if (std::fabs(a - c) < 1e-8f && std::fabs(b) < 1e-8f) {
+            vx = 1.0f; vy = 0.0f;
+        } else {
+            vx = b;
+            vy = lam2 - a;
+            float vn = std::sqrt(vx*vx + vy*vy);
+            if (vn < 1e-8f) { vx = 1.0f; vy = 0.0f; }
+            else { vx /= vn; vy /= vn; }
         }
-
-        float q = (a + d + f) / 3.0f;  // mean eigenvalue
-        float p2 = (a-q)*(a-q) + (d-q)*(d-q) + (f-q)*(f-q) + 2.0f * p1;
-        float p  = std::sqrt(p2 / 6.0f);
-
-        if (p < 1e-12f) return q;  // degenerate: all eigenvalues equal q
-
-        // B = (1/p) * (A - q*I)
-        float Bxx = (a - q) / p, Bxy = b / p, Bxz = c / p;
-        float Byy = (d - q) / p, Byz = e / p;
-        float Bzz = (f - q) / p;
-
-        // r = det(B) / 2
-        float r = (Bxx*(Byy*Bzz - Byz*Byz)
-                 - Bxy*(Bxy*Bzz - Byz*Bxz)
-                 + Bxz*(Bxy*Byz - Byy*Bxz)) * 0.5f;
-
-        // Clamp r to [-1, 1] to guard against floating-point drift
-        if (r <= -1.0f) r = -1.0f;
-        else if (r >= 1.0f) r = 1.0f;
-
-        float phi = std::acos(r) / 3.0f;
-
-        // Three eigenvalues (descending order)
-        float eig1 = q + 2.0f * p * std::cos(phi);
-        float eig3 = q + 2.0f * p * std::cos(phi + 2.0f * static_cast<float>(M_PI) / 3.0f);
-        float eig2 = 3.0f * q - eig1 - eig3;
-
-        return std::min({eig1, eig2, eig3});
+        v_weak = e1 * vx + e2 * vy;
     }
 
-    void Occupancy::check_deallocation() {
+    void Occupancy::check_deallocation(const point3f &los_hat) {
         if (info_constrained) return;
 
-        // Fast pre-filter 1: if the mean eigenvalue (trace/3) is below tau_info,
-        // then lambda_min < tau_info for certain (lambda_min <= mean eigenvalue).
-        if (lambda_max_cache < Occupancy::tau_info * 3.0f) return;
-
-        // Fast pre-filter 2: sufficient total evidence (low Beta variance) required.
+        // Fast pre-filter: need sufficient total evidence (low Beta variance).
         if (get_var() >= Occupancy::tau_var) return;
 
-        // Full check: compute exact minimum eigenvalue.
-        float lambda_min = compute_min_eigenvalue_3x3(info);
-        if (lambda_min > Occupancy::tau_info) {
+        // Conservative pre-filter on trace: trace(I_3d) >= lam1+lam2 (trace of I_2d).
+        // If trace(I_3d) < 2*tau_info, then lam2 < tau_info is guaranteed.
+        if (lambda_max_cache < Occupancy::tau_info * 2.0f) return;
+
+        float lam1, lam2;
+        point3f v_weak;
+        compute_2d_eigenstruct_impl(info, los_hat, lam1, lam2, v_weak);
+        if (lam2 > Occupancy::tau_info)
             info_constrained = true;
-        }
+    }
+
+    void Occupancy::get_2d_eigenstruct(const point3f &los,
+                                       float &lam1, float &lam2,
+                                       point3f &v_weak) const
+    {
+        compute_2d_eigenstruct_impl(info, los, lam1, lam2, v_weak);
     }
 
     std::ofstream &operator<<(std::ofstream &os, const Occupancy &oc) {

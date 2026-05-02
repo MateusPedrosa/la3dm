@@ -143,12 +143,33 @@ namespace la3dm {
 
         /*
          * @brief Lifecycle management: mark voxel as well-constrained when
-         *        Beta variance < tau_var AND λ_min(I) > tau_info.
+         *        Beta variance < tau_var AND lam2 of the projected 2×2 I > tau_info.
          *
-         * Once marked, compute_w_novelty returns 0 and update_info_matrix is a no-op,
-         * preventing further evidence accumulation in already-constrained voxels.
+         * Uses the most-recent observation's los direction to project I onto the
+         * 2D plane ⊥ los, then checks the minimum (weak) eigenvalue of that 2×2
+         * projection. This correctly handles the los-direction nullspace that makes
+         * the raw 3×3 minimum eigenvalue always near zero.
+         *
+         * @param los_hat  Unit line-of-sight vector from sensor to voxel (world frame).
          */
-        void check_deallocation();
+        void check_deallocation(const point3f &los_hat);
+
+        /*
+         * @brief Compute the 2D eigenstructure of I projected onto the plane ⊥ los.
+         *
+         * Projects the 3×3 information matrix onto an orthonormal basis of the plane
+         * perpendicular to los, then analytically decomposes the resulting 2×2 matrix.
+         * Returns lam1 (dominant), lam2 (weak), and v_weak (world-frame unit vector
+         * pointing along the least-observed arc direction).
+         *
+         * @param los    Unit line-of-sight direction (world frame).
+         * @param lam1   Output: dominant eigenvalue of projected 2×2 matrix.
+         * @param lam2   Output: weak eigenvalue of projected 2×2 matrix.
+         * @param v_weak Output: world-frame unit weak eigenvector (⊥ los).
+         */
+        void get_2d_eigenstruct(const point3f &los,
+                                float &lam1, float &lam2,
+                                point3f &v_weak) const;
 
         /// @return true if info matrix is still active (voxel not yet well-constrained).
         inline bool has_active_info_matrix() const { return !info_constrained; }
