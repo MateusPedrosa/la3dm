@@ -250,11 +250,12 @@ namespace la3dm {
                         // where loŝ = normalize(node_loc - origin)
                         // sensor_up is the sonar's vertical axis (beam-spread direction) in world frame
                         point3f los_vec = node_loc - origin;
+                        point3f los_hat;
                         point3f n_vec;
                         bool valid_n = false;
 
                         if (obs_range > 1e-6f) {
-                            point3f los_hat = los_vec * (1.0f / obs_range);
+                            los_hat = los_vec * (1.0f / obs_range);
                             float dot_su = (float)sensor_up.dot(los_hat);
                             n_vec = sensor_up - los_hat * dot_su;
                             float n_norm = (float)n_vec.norm();
@@ -283,7 +284,7 @@ namespace la3dm {
                                 node.update(ybar[j] * w_novelty, kbar[j] * w_novelty, obs_range);
 
                             // ---- Lifecycle management ----
-                            node.check_deallocation();
+                            node.check_deallocation(los_hat);
                         } else {
                             // Degenerate geometry: LOS parallel to sensor_up (rare).
                             // Fall back to full-weight update.
@@ -325,6 +326,188 @@ namespace la3dm {
 
 
         rtree.RemoveAll();
+    }
+
+    BGKLPreparedUpdate::~BGKLPreparedUpdate() {
+        for (auto it = bgkl_arr.begin(); it != bgkl_arr.end(); ++it)
+            delete it->second;
+    }
+
+    BGKLPreparedUpdate BGKLOctoMap::prepare_pointcloud_update(const PCLPointCloud &cloud,
+                                                               const point3f &origin,
+                                                               const point3f &sensor_up,
+                                                               float ds_resolution,
+                                                               float free_res,
+                                                               float max_range) {
+        BGKLPreparedUpdate result;
+        result.origin     = origin;
+        result.sensor_up  = sensor_up;
+
+        ////////// Preparation //////////////////////////
+        GPLineCloud xy;
+        GPLineCloud rays;
+        vector<int> ray_idx;
+        get_training_data(cloud, origin, ds_resolution, free_res, max_range, xy, rays, ray_idx);
+        assert(ray_idx.size() == xy.size());
+
+        if (xy.empty())
+            return result;  // result.empty == true
+
+        point3f lim_min, lim_max;
+        bbox(xy, lim_min, lim_max);
+
+        vector<BlockHashKey> blocks;
+        get_blocks_in_bbox(lim_min, lim_max, blocks);
+
+        for (int k = 0; k < (int)xy.size(); ++k) {
+            float p[] = {xy[k].first.x0(), xy[k].first.y0(), xy[k].first.z0()};
+            rtree.Insert(p, p, k);
+        }
+        /////////////////////////////////////////////////
+
+        ////////// Training /////////////////////////////
+#ifdef OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+        for (int i = 0; i < (int)blocks.size(); ++i) {
+            BlockHashKey key = blocks[i];
+            ExtendedBlock eblock = get_extended_block(key);
+            if (has_gp_points_in_bbox(eblock))
+#ifdef OPENMP
+#pragma omp critical
+#endif
+            {
+                result.test_blocks.push_back(key);
+            };
+
+            vector<int> xy_idx;
+            get_gp_points_in_bbox(key, xy_idx);
+            if (xy_idx.size() < 1)
+                continue;
+
+            vector<int> ray_keys(rays.size(), 0);
+            vector<float> block_x, block_y, block_w;
+            for (int j = 0; j < (int)xy_idx.size(); ++j) {
+#ifdef OPENMP
+#pragma omp critical
+#endif
+            {
+                if (ray_idx[xy_idx[j]] == -1) {
+                    block_x.push_back(xy[xy_idx[j]].first.x0());
+                    block_x.push_back(xy[xy_idx[j]].first.y0());
+                    block_x.push_back(xy[xy_idx[j]].first.z0());
+                    block_x.push_back(xy[xy_idx[j]].first.x0());
+                    block_x.push_back(xy[xy_idx[j]].first.y0());
+                    block_x.push_back(xy[xy_idx[j]].first.z0());
+                    block_y.push_back(1.0f);
+                    block_w.push_back(xy[xy_idx[j]].second);
+                }
+                else if (ray_keys[ray_idx[xy_idx[j]]] == 0) {
+                    ray_keys[ray_idx[xy_idx[j]]] = 1;
+                    block_x.push_back(rays[ray_idx[xy_idx[j]]].first.x0());
+                    block_x.push_back(rays[ray_idx[xy_idx[j]]].first.y0());
+                    block_x.push_back(rays[ray_idx[xy_idx[j]]].first.z0());
+                    block_x.push_back(rays[ray_idx[xy_idx[j]]].first.x1());
+                    block_x.push_back(rays[ray_idx[xy_idx[j]]].first.y1());
+                    block_x.push_back(rays[ray_idx[xy_idx[j]]].first.z1());
+                    block_y.push_back(0.0f);
+                    block_w.push_back(rays[ray_idx[xy_idx[j]]].second);
+                }
+            }
+            };
+            BGKL3f *bgkl = new BGKL3f(OcTreeNode::sf2, OcTreeNode::ell, theta_bw, phi_bw);
+            bgkl->train(block_x, block_y, block_w);
+#ifdef OPENMP
+#pragma omp critical
+#endif
+            {
+                result.bgkl_arr.emplace(key, bgkl);
+            };
+        }
+        /////////////////////////////////////////////////
+
+        rtree.RemoveAll();
+        result.empty = false;
+        return result;
+    }
+
+    void BGKLOctoMap::commit_pointcloud_update(const BGKLPreparedUpdate &upd) {
+        if (upd.empty) return;
+
+        ////////// Prediction ///////////////////////////
+#ifdef OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+        for (int i = 0; i < (int)upd.test_blocks.size(); ++i) {
+            BlockHashKey key = upd.test_blocks[i];
+#ifdef OPENMP
+#pragma omp critical
+#endif
+            {
+                if (block_arr.find(key) == block_arr.end())
+                    block_arr.emplace(key, new Block(hash_key_to_block(key)));
+            };
+            Block *block = block_arr[key];
+            vector<float> xs;
+            for (auto leaf_it = block->begin_leaf(); leaf_it != block->end_leaf(); ++leaf_it) {
+                point3f p = block->get_loc(leaf_it);
+                xs.push_back(p.x());
+                xs.push_back(p.y());
+                xs.push_back(p.z());
+            }
+
+            ExtendedBlock eblock = block->get_extended_block();
+            for (auto block_it = eblock.cbegin(); block_it != eblock.cend(); ++block_it) {
+                auto bgkl = upd.bgkl_arr.find(*block_it);
+                if (bgkl == upd.bgkl_arr.end())
+                    continue;
+
+                vector<float> ybar, kbar;
+                bgkl->second->predict(upd.origin, upd.sensor_up, xs, ybar, kbar);
+
+                int j = 0;
+                for (auto leaf_it = block->begin_leaf(); leaf_it != block->end_leaf(); ++leaf_it, ++j) {
+                    OcTreeNode &node = leaf_it.get_node();
+                    auto node_loc = block->get_loc(leaf_it);
+
+                    float obs_range = (float)(node_loc - upd.origin).norm();
+
+                    if (kbar[j] > 0.000001f) {
+                        point3f los_vec = node_loc - upd.origin;
+                        point3f los_hat;
+                        point3f n_vec;
+                        bool valid_n = false;
+
+                        if (obs_range > 1e-6f) {
+                            los_hat = los_vec * (1.0f / obs_range);
+                            float dot_su = (float)upd.sensor_up.dot(los_hat);
+                            n_vec = upd.sensor_up - los_hat * dot_su;
+                            float n_norm = (float)n_vec.norm();
+                            if (n_norm > 1e-8f) {
+                                n_vec *= (1.0f / n_norm);
+                                valid_n = true;
+                            }
+                        }
+
+                        if (valid_n) {
+                            float w_novelty = node.compute_w_novelty(n_vec);
+
+                            float w_range = 1.0f / (obs_range * obs_range + 1.0f);
+                            if (w_range < 0.05f) w_range = 0.05f;
+                            node.update_info_matrix(n_vec, w_range);
+
+                            if (w_novelty > 1e-8f)
+                                node.update(ybar[j] * w_novelty, kbar[j] * w_novelty, obs_range);
+
+                            node.check_deallocation(los_hat);
+                        } else {
+                            node.update(ybar[j], kbar[j], obs_range);
+                        }
+                    }
+                }
+            }
+        }
+        /////////////////////////////////////////////////
     }
 
     void BGKLOctoMap::get_bbox(point3f &lim_min, point3f &lim_max) const {

@@ -24,6 +24,30 @@ namespace la3dm {
      * depth are rooted. Occupancy values in one Block is predicted by 
      * its ExtendedBlock via Bayesian generalized kernel inference.
      */
+    // Forward declaration so BGKLPreparedUpdate can hold BGKL3f* without
+    // pulling in bgklinference.h (and its Eigen dependency) into this header.
+    template<int dim, typename T> class BGKLInference;
+    typedef BGKLInference<3, float> BGKL3f;
+
+    /// Intermediate result of the lock-free prepare phase of a map update.
+    /// Owns the heap-allocated BGKL3f kernel objects; destructor is defined in
+    /// bgkloctomap.cpp where BGKLInference is complete.
+    struct BGKLPreparedUpdate {
+        std::vector<BlockHashKey>                  test_blocks;
+        std::unordered_map<BlockHashKey, BGKL3f*>  bgkl_arr;
+        point3f                                     origin;
+        point3f                                     sensor_up;
+        bool                                        empty = true;
+
+        BGKLPreparedUpdate() = default;
+        BGKLPreparedUpdate(BGKLPreparedUpdate&&) = default;
+        BGKLPreparedUpdate& operator=(BGKLPreparedUpdate&&) = default;
+        BGKLPreparedUpdate(const BGKLPreparedUpdate&) = delete;
+        BGKLPreparedUpdate& operator=(const BGKLPreparedUpdate&) = delete;
+
+        ~BGKLPreparedUpdate();  // defined in bgkloctomap.cpp
+    };
+
     class BGKLOctoMap {
     public:
         /// Types used internally
@@ -91,6 +115,18 @@ namespace la3dm {
                                float ds_resolution,
                                float free_res = 2.0f,
                                float max_range = -1);
+
+        /// Lock-free phase: downsampling, ray tracing, BGKL kernel training.
+        /// Does NOT access block_arr — safe to call without holding ot_mutex_.
+        BGKLPreparedUpdate prepare_pointcloud_update(const PCLPointCloud &cloud,
+                                                     const point3f &origin,
+                                                     const point3f &sensor_up,
+                                                     float ds_resolution,
+                                                     float free_res,
+                                                     float max_range);
+
+        /// Write phase: prediction loop + node.update(). Must be called under unique_lock(ot_mutex_).
+        void commit_pointcloud_update(const BGKLPreparedUpdate &upd);
 
         void insert_training_data(const GPLineCloud &cloud);
 
@@ -242,23 +278,51 @@ namespace la3dm {
 
             // Spatial-filter constructor: only walks leaves of blocks whose
             // center is within `radius + block_half_diagonal` of `center`.
-            // The half-diagonal padding (sqrt(3)/2 * block_size) guarantees no
-            // voxel that would have passed a per-leaf radius check is skipped.
+            // Uses grid enumeration (O(r³/block_size³)) instead of a linear
+            // scan of all blocks (O(N_total_blocks)) — stays fast as the map grows.
             LeafIterator(const BGKLOctoMap *map, const point3f &center, float radius)
                     : filter_active(true), filter_center(center) {
                 assert(map != nullptr);
-                float padded = radius + 0.866025404f * map->block_size;
+                float bs      = map->block_size;
+                float padded  = radius + 0.866025404f * bs;
                 block_threshold_sq = padded * padded;
-
-                block_it = map->block_arr.cbegin();
                 end_block = map->block_arr.cend();
-                advance_past_filtered_blocks();
 
-                if (block_it != end_block) {
-                    leaf_it = block_it->second->begin_leaf();
+                // Enumerate all block grid cells whose center is within the
+                // padded sphere and perform direct hash-table lookups.
+                int ix_min = (int)std::floor((center.x() - padded) / bs + 0.5f);
+                int ix_max = (int)std::floor((center.x() + padded) / bs + 0.5f);
+                int iy_min = (int)std::floor((center.y() - padded) / bs + 0.5f);
+                int iy_max = (int)std::floor((center.y() + padded) / bs + 0.5f);
+                int iz_min = (int)std::floor((center.z() - padded) / bs + 0.5f);
+                int iz_max = (int)std::floor((center.z() + padded) / bs + 0.5f);
+
+                for (int ix = ix_min; ix <= ix_max; ++ix) {
+                    float bx = ix * bs;
+                    float dx = bx - center.x();
+                    for (int iy = iy_min; iy <= iy_max; ++iy) {
+                        float by = iy * bs;
+                        float dy = by - center.y();
+                        for (int iz = iz_min; iz <= iz_max; ++iz) {
+                            float bz = iz * bs;
+                            float dz = bz - center.z();
+                            if (dx*dx + dy*dy + dz*dz > block_threshold_sq) continue;
+                            BlockHashKey key = block_to_hash_key(bx, by, bz);
+                            auto it = map->block_arr.find(key);
+                            if (it == map->block_arr.end()) continue;
+                            sphere_block_iters_.push_back(it);
+                        }
+                    }
+                }
+
+                sphere_idx_ = 0;
+                if (!sphere_block_iters_.empty()) {
+                    block_it = sphere_block_iters_[0];
+                    leaf_it  = block_it->second->begin_leaf();
                     end_leaf = block_it->second->end_leaf();
                 } else {
-                    leaf_it = OcTree::LeafIterator();
+                    block_it = end_block;
+                    leaf_it  = OcTree::LeafIterator();
                     end_leaf = OcTree::LeafIterator();
                 }
             }
@@ -285,29 +349,26 @@ namespace la3dm {
             LeafIterator &operator++() {
                 ++leaf_it;
                 if (leaf_it == end_leaf) {
-                    ++block_it;
-                    advance_past_filtered_blocks();
-                    if (block_it != end_block) {
-                        leaf_it = block_it->second->begin_leaf();
-                        end_leaf = block_it->second->end_leaf();
+                    if (filter_active) {
+                        ++sphere_idx_;
+                        if (sphere_idx_ < sphere_block_iters_.size()) {
+                            block_it = sphere_block_iters_[sphere_idx_];
+                            leaf_it  = block_it->second->begin_leaf();
+                            end_leaf = block_it->second->end_leaf();
+                        } else {
+                            block_it = end_block;
+                            leaf_it  = OcTree::LeafIterator();
+                            end_leaf = OcTree::LeafIterator();
+                        }
+                    } else {
+                        ++block_it;
+                        if (block_it != end_block) {
+                            leaf_it = block_it->second->begin_leaf();
+                            end_leaf = block_it->second->end_leaf();
+                        }
                     }
                 }
                 return *this;
-            }
-
-            // No-op unless the spatial-filter constructor was used. Advances
-            // block_it past any block whose center-to-filter_center squared
-            // distance exceeds block_threshold_sq.
-            void advance_past_filtered_blocks() {
-                if (!filter_active) return;
-                while (block_it != end_block) {
-                    point3f c = block_it->second->get_center();
-                    float dx = c.x() - filter_center.x();
-                    float dy = c.y() - filter_center.y();
-                    float dz = c.z() - filter_center.z();
-                    if (dx*dx + dy*dy + dz*dz <= block_threshold_sq) return;
-                    ++block_it;
-                }
             }
 
             OcTreeNode &operator*() const {
@@ -359,6 +420,11 @@ namespace la3dm {
             bool filter_active = false;
             point3f filter_center;
             float block_threshold_sq = 0.0f;
+
+            // Pre-built list of matching blocks for the sphere constructor.
+            // Avoids the O(N_total_blocks) linear scan of advance_past_filtered_blocks.
+            std::vector<std::unordered_map<BlockHashKey, Block *>::const_iterator> sphere_block_iters_;
+            std::size_t sphere_idx_ = 0;
         };
 
         /// @return the beginning of leaf iterator
