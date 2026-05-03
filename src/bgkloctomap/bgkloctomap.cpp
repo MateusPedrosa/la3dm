@@ -1,6 +1,9 @@
 #include <algorithm>
+#include <cmath>
+#include <limits>
 #include <ros/ros.h>
 #include <pcl/filters/voxel_grid.h>
+#include <Eigen/Dense>
 #include "bgkloctomap.h"
 #include "bgklinference.h"
 
@@ -44,7 +47,10 @@ namespace la3dm {
             : resolution(resolution), block_depth(block_depth),
               block_size((float) pow(2, block_depth - 1) * resolution),
               theta_bw(theta_bw), phi_bw(phi_bw),
-              free_ray_range_weight(free_ray_range_weight) {
+              free_ray_range_weight(free_ray_range_weight),
+              pose_level_weighting_(false),
+              pose_history_K_(20),
+              pose_novelty_sigma_(0.3f) {
         Block::resolution = resolution;
         Block::size = this->block_size;
         Block::key_loc_map = init_key_loc_map(resolution, block_depth);
@@ -69,6 +75,74 @@ namespace la3dm {
         }
     }
 
+    void BGKLOctoMap::configure_pose_level_weighting(
+            bool enabled, int K, float sigma,
+            float w_roll, float w_pitch, float w_yaw,
+            float w_vx_l2, float w_vy_l2, float w_vz_l2) {
+        pose_level_weighting_ = enabled;
+        pose_history_K_       = K;
+        pose_novelty_sigma_   = sigma;
+        pose_w_[0] = w_roll;
+        pose_w_[1] = w_pitch;
+        pose_w_[2] = w_yaw;
+        pose_w_[3] = w_vx_l2;
+        pose_w_[4] = w_vy_l2;
+        pose_w_[5] = w_vz_l2;
+    }
+
+    void BGKLOctoMap::update_pose_history_(float px, float py, float pz,
+                                           float qx, float qy, float qz, float qw) {
+        PoseEntry e;
+        e.px = px; e.py = py; e.pz = pz;
+        e.qx = qx; e.qy = qy; e.qz = qz; e.qw = qw;
+        pose_history_.push_back(e);
+        while ((int)pose_history_.size() > pose_history_K_)
+            pose_history_.pop_front();
+    }
+
+    float BGKLOctoMap::compute_w_pose_(float px, float py, float pz,
+                                        float qx, float qy, float qz, float qw) const {
+        if (pose_history_.empty()) return 1.0f;
+
+        Eigen::Quaternionf q_cur(qw, qx, qy, qz);
+        Eigen::Vector3f    p_cur(px, py, pz);
+
+        float d_min_sq = std::numeric_limits<float>::max();
+
+        for (const auto& entry : pose_history_) {
+            Eigen::Quaternionf q_i(entry.qw, entry.qx, entry.qy, entry.qz);
+            Eigen::Vector3f    p_i(entry.px, entry.py, entry.pz);
+
+            // Relative rotation: q_cur expressed in frame of q_i
+            Eigen::Quaternionf q_rel = q_cur * q_i.conjugate();
+            q_rel.normalize();
+
+            // SO(3) log map via AngleAxisf (handles near-identity correctly: 0*arbitrary_axis = 0)
+            Eigen::AngleAxisf aa(q_rel);
+            Eigen::Vector3f omega = aa.axis() * aa.angle();
+
+            // Relative translation in body frame of pose i
+            Eigen::Matrix3f R_i = q_i.toRotationMatrix();
+            Eigen::Vector3f t_body = R_i.transpose() * (p_cur - p_i);
+
+            float xi[6] = { omega[0], omega[1], omega[2],
+                            t_body[0], t_body[1], t_body[2] };
+
+            float d_sq = 0.0f;
+            for (int k = 0; k < 6; ++k)
+                d_sq += pose_w_[k] * xi[k] * xi[k];
+
+            if (d_sq < d_min_sq)
+                d_min_sq = d_sq;
+        }
+
+        float sigma2 = pose_novelty_sigma_ * pose_novelty_sigma_;
+        float w = 1.0f - std::exp(-d_min_sq / sigma2);
+        if (w < 0.0f) w = 0.0f;
+        if (w > 1.0f) w = 1.0f;
+        return w;
+    }
+
     void BGKLOctoMap::set_resolution(float resolution) {
         this->resolution = resolution;
         Block::resolution = resolution;
@@ -88,11 +162,21 @@ namespace la3dm {
     void BGKLOctoMap::insert_pointcloud(const PCLPointCloud &cloud, const point3f &origin,
                                       const point3f &sensor_up,
                                       float ds_resolution,
-                                      float free_res, float max_range) {
+                                      float free_res, float max_range,
+                                      float qx, float qy, float qz, float qw) {
 
 #ifdef DEBUG
         Debug_Msg("Insert pointcloud: " << "cloud size: " << cloud.size() << " origin: " << origin);
 #endif
+
+        // ---- Per-frame pose novelty weight ----
+        float w_pose_frame = 1.0f;
+        if (pose_level_weighting_) {
+            w_pose_frame = compute_w_pose_(origin.x(), origin.y(), origin.z(), qx, qy, qz, qw);
+            update_pose_history_(origin.x(), origin.y(), origin.z(), qx, qy, qz, qw);
+            ROS_INFO_THROTTLE(1.0, "[pose_novelty] w_pose=%.4f  history=%zu",
+                              (double)w_pose_frame, pose_history_.size());
+        }
 
         ////////// Preparation //////////////////////////
         /////////////////////////////////////////////////
@@ -266,29 +350,27 @@ namespace la3dm {
                         }
 
                         if (valid_n) {
-                            // ---- Per-voxel novelty weight ----
-                            // w_novelty = 1 - (nᵀ I n) / (λ_max_cache + ε)
+                            // Capture new-voxel flag BEFORE info matrix update
+                            bool is_new_voxel = (node.get_lambda_max_cache() < 1e-9f);
+
+                            // w_novelty still computed — needed for info matrix (NBV planner)
                             float w_novelty = node.compute_w_novelty(n_vec);
 
-                            // ---- Rank-1 information matrix update ----
-                            // I(p) += w_range · n nᵀ  (uses w_range only, NOT w_novelty)
-                            // Matches training-data formula: w_range ≈ 1/r², floored at 0.05
                             float w_range = 1.0f / (obs_range * obs_range + 1.0f);
                             if (w_range < 0.05f) w_range = 0.05f;
                             node.update_info_matrix(n_vec, w_range);
 
-                            // ---- Beta update with w_total = w_range_baked * w_novelty ----
-                            // ybar/kbar already encode w_range (training-data peak_weight).
-                            // Scaling by w_novelty gives the combined novelty-weighted evidence.
-                            if (w_novelty > 1e-8f)
-                                node.update(ybar[j] * w_novelty, kbar[j] * w_novelty, obs_range);
+                            float w_beta = pose_level_weighting_
+                                           ? (is_new_voxel ? 1.0f : w_pose_frame)
+                                           : w_novelty;
+                            if (w_beta > 1e-8f)
+                                node.update(ybar[j] * w_beta, kbar[j] * w_beta, obs_range);
 
-                            // ---- Lifecycle management ----
                             node.check_deallocation(los_hat);
                         } else {
                             // Degenerate geometry: LOS parallel to sensor_up (rare).
-                            // Fall back to full-weight update.
-                            node.update(ybar[j], kbar[j], obs_range);
+                            float w_beta = pose_level_weighting_ ? w_pose_frame : 1.0f;
+                            node.update(ybar[j] * w_beta, kbar[j] * w_beta, obs_range);
                         }
                     }
                 }
@@ -338,10 +420,22 @@ namespace la3dm {
                                                                const point3f &sensor_up,
                                                                float ds_resolution,
                                                                float free_res,
-                                                               float max_range) {
+                                                               float max_range,
+                                                               float qx, float qy,
+                                                               float qz, float qw) {
         BGKLPreparedUpdate result;
         result.origin     = origin;
         result.sensor_up  = sensor_up;
+
+        // ---- Per-frame pose novelty weight ----
+        float w_pose_frame = 1.0f;
+        if (pose_level_weighting_) {
+            w_pose_frame = compute_w_pose_(origin.x(), origin.y(), origin.z(), qx, qy, qz, qw);
+            update_pose_history_(origin.x(), origin.y(), origin.z(), qx, qy, qz, qw);
+            ROS_INFO_THROTTLE(1.0, "[pose_novelty] w_pose=%.4f  history=%zu",
+                              (double)w_pose_frame, pose_history_.size());
+        }
+        result.w_pose = w_pose_frame;
 
         ////////// Preparation //////////////////////////
         GPLineCloud xy;
@@ -490,18 +584,24 @@ namespace la3dm {
                         }
 
                         if (valid_n) {
+                            bool is_new_voxel = (node.get_lambda_max_cache() < 1e-9f);
+
                             float w_novelty = node.compute_w_novelty(n_vec);
 
                             float w_range = 1.0f / (obs_range * obs_range + 1.0f);
                             if (w_range < 0.05f) w_range = 0.05f;
                             node.update_info_matrix(n_vec, w_range);
 
-                            if (w_novelty > 1e-8f)
-                                node.update(ybar[j] * w_novelty, kbar[j] * w_novelty, obs_range);
+                            float w_beta = pose_level_weighting_
+                                           ? (is_new_voxel ? 1.0f : upd.w_pose)
+                                           : w_novelty;
+                            if (w_beta > 1e-8f)
+                                node.update(ybar[j] * w_beta, kbar[j] * w_beta, obs_range);
 
                             node.check_deallocation(los_hat);
                         } else {
-                            node.update(ybar[j], kbar[j], obs_range);
+                            float w_beta = pose_level_weighting_ ? upd.w_pose : 1.0f;
+                            node.update(ybar[j] * w_beta, kbar[j] * w_beta, obs_range);
                         }
                     }
                 }

@@ -3,6 +3,7 @@
 
 #include <unordered_map>
 #include <vector>
+#include <deque>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include "rtree.h"
@@ -11,6 +12,12 @@
 #include "point6f.h"
 
 namespace la3dm {
+
+    /// Single pose history entry: world-frame position + unit quaternion.
+    struct PoseEntry {
+        float px, py, pz;
+        float qx, qy, qz, qw;
+    };
 
     /// PCL PointCloud types as input
     typedef pcl::PointXYZI PCLPointType;
@@ -38,6 +45,7 @@ namespace la3dm {
         point3f                                     origin;
         point3f                                     sensor_up;
         bool                                        empty = true;
+        float                                       w_pose = 1.0f;
 
         BGKLPreparedUpdate() = default;
         BGKLPreparedUpdate(BGKLPreparedUpdate&&) = default;
@@ -114,7 +122,8 @@ namespace la3dm {
                                const point3f &sensor_up,
                                float ds_resolution,
                                float free_res = 2.0f,
-                               float max_range = -1);
+                               float max_range = -1,
+                               float qx = 0.f, float qy = 0.f, float qz = 0.f, float qw = 1.f);
 
         /// Lock-free phase: downsampling, ray tracing, BGKL kernel training.
         /// Does NOT access block_arr — safe to call without holding ot_mutex_.
@@ -123,10 +132,19 @@ namespace la3dm {
                                                      const point3f &sensor_up,
                                                      float ds_resolution,
                                                      float free_res,
-                                                     float max_range);
+                                                     float max_range,
+                                                     float qx = 0.f, float qy = 0.f,
+                                                     float qz = 0.f, float qw = 1.f);
 
         /// Write phase: prediction loop + node.update(). Must be called under unique_lock(ot_mutex_).
         void commit_pointcloud_update(const BGKLPreparedUpdate &upd);
+
+        /// Configure pose-level novelty weighting. Call once after construction.
+        /// When enabled, the per-frame w_pose replaces the per-voxel w_novelty in the
+        /// Beta update path. The info matrix update is unchanged.
+        void configure_pose_level_weighting(bool enabled, int K, float sigma,
+                                            float w_roll, float w_pitch, float w_yaw,
+                                            float w_vx_l2, float w_vy_l2, float w_vz_l2);
 
         void insert_training_data(const GPLineCloud &cloud);
 
@@ -508,6 +526,19 @@ namespace la3dm {
         bool free_ray_range_weight;
         std::unordered_map<BlockHashKey, Block *> block_arr;
         MyRTree rtree;
+
+        // ---- Pose-level novelty weighting ----
+        bool pose_level_weighting_ = false;
+        std::deque<PoseEntry> pose_history_;
+        int   pose_history_K_     = 20;
+        float pose_novelty_sigma_ = 0.3f;
+        // W diagonal: [w_roll, w_pitch, w_yaw, w_vx/l², w_vy/l², w_vz/l²]
+        float pose_w_[6] = {1.0f, 0.6f, 0.05f, 0.2f, 0.05f, 0.5f};
+
+        float compute_w_pose_(float px, float py, float pz,
+                              float qx, float qy, float qz, float qw) const;
+        void  update_pose_history_(float px, float py, float pz,
+                                   float qx, float qy, float qz, float qw);
     };
 
 }

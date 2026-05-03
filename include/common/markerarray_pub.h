@@ -231,6 +231,8 @@ namespace la3dm {
             pub.publish(*msg);
         }
 
+        uint32_t getNumSubscribers() const { return pub.getNumSubscribers(); }
+
     private:
         ros::NodeHandle nh;
         ros::Publisher pub;
