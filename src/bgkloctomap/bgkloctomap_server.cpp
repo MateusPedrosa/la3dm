@@ -39,6 +39,7 @@ std::string map_topic_var("/variance_vis_array");
 std::string map_topic_constraint("/constraint_vis_array");
 double max_range = 4.0;
 double resolution = 0.1;
+double ds_resolution = 0.1;
 int block_depth = 4;
 double sf2 = 0.1;
 double ell = 0.2;
@@ -116,7 +117,7 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
     ros::Time start = ros::Time::now();
     map->insert_pointcloud(*pcl_cloud_world, origin, sensor_up,
-                           (float)resolution, (float)free_resolution,
+                           (float)ds_resolution, (float)free_resolution,
                            (float)max_range,
                            (float)orientation.x(), (float)orientation.y(),
                            (float)orientation.z(), (float)orientation.w());
@@ -400,6 +401,7 @@ int main(int argc, char **argv) {
     nh.param<std::string>("topic_unk", map_topic_unk, map_topic_unk);
     nh.param<double>("max_range", max_range, max_range);
     nh.param<double>("resolution", resolution, resolution);
+    nh.param<double>("ds_resolution", ds_resolution, ds_resolution);
     nh.param<int>("block_depth", block_depth, block_depth);
     nh.param<double>("sf2", sf2, sf2);
     nh.param<double>("ell", ell, ell);
@@ -445,6 +447,7 @@ int main(int argc, char **argv) {
             "topic: " << map_topic_occ << std::endl <<
             "max_range: " << max_range << std::endl <<
             "resolution: " << resolution << std::endl <<
+            "ds_resolution: " << ds_resolution << std::endl <<
             "block_depth: " << block_depth << std::endl <<
             "sf2: " << sf2 << std::endl <<
             "ell: " << ell << std::endl <<
