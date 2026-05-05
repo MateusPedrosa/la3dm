@@ -136,8 +136,21 @@ namespace la3dm {
                                                      float qx = 0.f, float qy = 0.f,
                                                      float qz = 0.f, float qw = 1.f);
 
+        /// Voxel-level change record produced by commit_pointcloud_update().
+        /// Callers accumulate these into a dirty buffer so that computePriorityCache()
+        /// can update the candidate index incrementally instead of re-scanning all leaves.
+        struct DirtyEntry {
+            point3f pos;        // world-frame voxel centre
+            float   priority;   // node.get_var() after update
+            float   info[6];    // raw symmetric info matrix [Ixx,Ixy,Ixz,Iyy,Iyz,Izz]
+            bool    active;     // has_active_info_matrix() && priority > 1e-8f
+        };
+
         /// Write phase: prediction loop + node.update(). Must be called under unique_lock(ot_mutex_).
-        void commit_pointcloud_update(const BGKLPreparedUpdate &upd);
+        /// If dirty_out is non-null, a DirtyEntry is appended for every voxel whose info
+        /// matrix was updated, allowing callers to maintain an incremental candidate index.
+        void commit_pointcloud_update(const BGKLPreparedUpdate &upd,
+                                      std::vector<DirtyEntry>* dirty_out = nullptr);
 
         /// Configure pose-level novelty weighting. Call once after construction.
         /// When enabled, the per-frame w_pose replaces the per-voxel w_novelty in the

@@ -177,6 +177,17 @@ namespace la3dm {
         /// @return the cached lambda_max (trace of I) for external queries.
         inline float get_lambda_max_cache() const { return lambda_max_cache; }
 
+        /// Copy the raw information matrix (upper-triangle [Ixx,Ixy,Ixz,Iyy,Iyz,Izz])
+        /// out for deferred eigenstruct computation after releasing the map lock.
+        inline void get_info(float out[6]) const {
+            for (int i = 0; i < 6; ++i) out[i] = info[i];
+        }
+
+        /// Compute 2D eigenstructure from a raw info array — no node instance required.
+        /// Identical to get_2d_eigenstruct() but callable without holding a node reference.
+        static void compute_2d_eigenstruct_raw(const float info[6], const point3f &los,
+                                               float &lam1, float &lam2, point3f &v_weak);
+
         bool classified;
 
         // Public so they can be set from external code (e.g. the ROS server node)

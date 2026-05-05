@@ -525,7 +525,8 @@ namespace la3dm {
         return result;
     }
 
-    void BGKLOctoMap::commit_pointcloud_update(const BGKLPreparedUpdate &upd) {
+    void BGKLOctoMap::commit_pointcloud_update(const BGKLPreparedUpdate &upd,
+                                               std::vector<DirtyEntry>* dirty_out) {
         if (upd.empty) return;
 
         ////////// Prediction ///////////////////////////
@@ -599,6 +600,18 @@ namespace la3dm {
                                 node.update(ybar[j] * w_beta, kbar[j] * w_beta, obs_range);
 
                             node.check_deallocation(los_hat);
+
+                            if (dirty_out) {
+                                DirtyEntry e;
+                                e.pos      = node_loc;
+                                e.priority = node.get_var();
+                                e.active   = node.has_active_info_matrix() && e.priority > 1e-8f;
+                                node.get_info(e.info);
+#ifdef OPENMP
+                                #pragma omp critical
+#endif
+                                dirty_out->push_back(e);
+                            }
                         } else {
                             float w_beta = pose_level_weighting_ ? upd.w_pose : 1.0f;
                             node.update(ybar[j] * w_beta, kbar[j] * w_beta, obs_range);

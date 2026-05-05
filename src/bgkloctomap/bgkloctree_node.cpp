@@ -161,6 +161,12 @@ namespace la3dm {
         compute_2d_eigenstruct_impl(info, los, lam1, lam2, v_weak);
     }
 
+    void Occupancy::compute_2d_eigenstruct_raw(const float I[6], const point3f &los,
+                                               float &lam1, float &lam2, point3f &v_weak)
+    {
+        compute_2d_eigenstruct_impl(I, los, lam1, lam2, v_weak);
+    }
+
     std::ofstream &operator<<(std::ofstream &os, const Occupancy &oc) {
         os.write((char *) &oc.m_A, sizeof(oc.m_A));
         os.write((char *) &oc.m_B, sizeof(oc.m_B));
