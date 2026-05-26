@@ -339,16 +339,17 @@ void publishMapVisualization(const ros::TimerEvent&) {
             auto state = it.get_node().get_state();
             if (state == la3dm::State::OCCUPIED || state == la3dm::State::UNCERTAIN) {
                 std::string ns = (state == la3dm::State::OCCUPIED) ? "occupied" : "uncertain";
+                float t = (float)std::min(std::max(it.get_node().get_var() / (float)max_var_vis, 0.0f), 1.0f);
                 if (original_size)
                 {
-                    m_pub_var->insert_color_point3d(p.x(), p.y(), p.z(), 0.0, max_var_vis, it.get_node().get_var(), it.get_size(), ns);
+                    m_pub_var->insert_point3d_color(p.x(), p.y(), p.z(), it.get_size(), t, 1.0f - t, 0.0f, 1.0f, ns);
                 }
                 else
                 {
                     auto pruned = it.get_pruned_locs();
                     for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
                     {
-                        m_pub_var->insert_color_point3d(n->x(), n->y(), n->z(), 0.0, max_var_vis, it.get_node().get_var(), map->get_resolution(), ns);
+                        m_pub_var->insert_point3d_color(n->x(), n->y(), n->z(), map->get_resolution(), t, 1.0f - t, 0.0f, 1.0f, ns);
                     }
                 }
             }
