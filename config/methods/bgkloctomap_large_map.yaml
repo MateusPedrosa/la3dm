@@ -4,10 +4,10 @@ frame_id: map
 
 # Map topic, grid cell mininum resolution
 topic: /occupied_cells_vis_array
-resolution: 0.2
+resolution: 0.25
 block_depth: 5 # Test-data octree depth (see Wang & Englot ICRA 2016)
 max_range: 20 # Sensor max range (m)
-max_vis_radius: 40.0 # Visualization sphere radius around the robot (m); 0 = unlimited
+max_vis_radius: 0 # Visualization sphere radius around the robot (m); 0 = unlimited
 original_size: true 
 
 # Bounds on map height
@@ -16,11 +16,11 @@ max_z: 3.0
 
 # Kernel parameters
 sf2: 1.0
-ell: 0.6
+ell: 0.3
 
 # Sampling resolutions
-free_resolution: 0.4 #6.5 for block depth 5, 3.25 for block depth 4, 13 for depth 6
-ds_resolution: -1.0  # Downsampling factor
+free_resolution: 0.25 #6.5 for block depth 5, 3.25 for block depth 4, 13 for depth 6
+ds_resolution: 0.25  # Downsampling factor
 
 # Free/Occupied Thresholds
 free_thresh: 0.3
