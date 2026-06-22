@@ -62,10 +62,6 @@ float theta_bw = 0.6f * 3.1415926f / 180.0f;
 float phi_bw = 20.0f * 3.1415926f / 180.0f;
 bool free_ray_range_weight = false;
 
-// Lifecycle (info matrix deallocation) parameters
-float tau_var  = 0.01f;
-float tau_info = 0.5f;
-
 // ---- Pose-level novelty weighting parameters ----
 bool  use_pose_level_weighting = false;
 int   pose_history_size        = 20;
@@ -428,10 +424,6 @@ int main(int argc, char **argv) {
     nh.param<float>("phi_bw",      phi_bw,      phi_bw);
     nh.param<bool>("free_ray_range_weight", free_ray_range_weight, free_ray_range_weight);
 
-    // Lifecycle (info matrix deallocation) parameters
-    nh.param<float>("tau_var",  tau_var,  tau_var);
-    nh.param<float>("tau_info", tau_info, tau_info);
-
     // Pose-level novelty weighting
     nh.param<bool> ("use_pose_level_weighting", use_pose_level_weighting, use_pose_level_weighting);
     nh.param<int>  ("pose_history_size",         pose_history_size,        pose_history_size);
@@ -466,8 +458,6 @@ int main(int argc, char **argv) {
             "prior_B: " << prior_B << std::endl <<
             "theta_bw: " << theta_bw << std::endl <<
             "phi_bw: " << phi_bw << std::endl <<
-            "tau_var: " << tau_var << std::endl <<
-            "tau_info: " << tau_info << std::endl <<
             "free_ray_range_weight: " << free_ray_range_weight << std::endl <<
             "coarse_depth_steps: " << coarse_depth_steps << std::endl <<
             "use_pose_level_weighting: " << use_pose_level_weighting << std::endl <<
@@ -477,10 +467,6 @@ int main(int argc, char **argv) {
 
     map = new la3dm::BGKLOctoMap(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh,
                                   var_thresh, prior_A, prior_B, theta_bw, phi_bw, free_ray_range_weight);
-
-    // Set lifecycle thresholds on the voxel class
-    la3dm::OcTreeNode::tau_var  = tau_var;
-    la3dm::OcTreeNode::tau_info = tau_info;
 
     map->configure_pose_level_weighting(use_pose_level_weighting, pose_history_size,
                                         pose_novelty_sigma,

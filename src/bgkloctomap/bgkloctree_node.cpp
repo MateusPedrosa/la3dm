@@ -12,13 +12,10 @@ namespace la3dm {
     float Occupancy::var_thresh = 1000.0f;
     float Occupancy::prior_A = 0.5f;
     float Occupancy::prior_B = 0.5f;
-    float Occupancy::tau_var  = 0.01f;
-    float Occupancy::tau_info = 0.5f;
-
     Occupancy::Occupancy(float A, float B)
         : m_A(Occupancy::prior_A + A), m_B(Occupancy::prior_B + B),
           classified(false), is_trusted(false),
-          lambda_max_cache(0.0f), info_constrained(false) {
+          lambda_max_cache(0.0f) {
         info[0] = info[1] = info[2] = info[3] = info[4] = info[5] = 0.0f;
         float var = get_var();
         if (var > Occupancy::var_thresh)
@@ -137,34 +134,11 @@ namespace la3dm {
         v_weak = e1 * vx + e2 * vy;
     }
 
-    void Occupancy::check_deallocation(const point3f &los_hat) {
-        if (info_constrained) return;
-
-        // Fast pre-filter: need sufficient total evidence (low Beta variance).
-        if (get_var() >= Occupancy::tau_var) return;
-
-        // Conservative pre-filter on trace: trace(I_3d) >= lam1+lam2 (trace of I_2d).
-        // If trace(I_3d) < 2*tau_info, then lam2 < tau_info is guaranteed.
-        if (lambda_max_cache < Occupancy::tau_info * 2.0f) return;
-
-        float lam1, lam2;
-        point3f v_weak;
-        compute_2d_eigenstruct_impl(info, los_hat, lam1, lam2, v_weak);
-        if (lam2 > Occupancy::tau_info)
-            info_constrained = true;
-    }
-
     void Occupancy::get_2d_eigenstruct(const point3f &los,
                                        float &lam1, float &lam2,
                                        point3f &v_weak) const
     {
         compute_2d_eigenstruct_impl(info, los, lam1, lam2, v_weak);
-    }
-
-    void Occupancy::compute_2d_eigenstruct_raw(const float I[6], const point3f &los,
-                                               float &lam1, float &lam2, point3f &v_weak)
-    {
-        compute_2d_eigenstruct_impl(I, los, lam1, lam2, v_weak);
     }
 
     std::ofstream &operator<<(std::ofstream &os, const Occupancy &oc) {

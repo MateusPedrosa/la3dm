@@ -365,8 +365,6 @@ namespace la3dm {
                                            : w_novelty;
                             if (w_beta > 1e-8f)
                                 node.update(ybar[j] * w_beta, kbar[j] * w_beta, obs_range);
-
-                            node.check_deallocation(los_hat);
                         } else {
                             // Degenerate geometry: LOS parallel to sensor_up (rare).
                             float w_beta = pose_level_weighting_ ? w_pose_frame : 1.0f;
@@ -599,13 +597,11 @@ namespace la3dm {
                             if (w_beta > 1e-8f)
                                 node.update(ybar[j] * w_beta, kbar[j] * w_beta, obs_range);
 
-                            node.check_deallocation(los_hat);
-
                             if (dirty_out) {
                                 DirtyEntry e;
                                 e.pos      = node_loc;
                                 e.priority = node.get_var();
-                                e.active   = node.has_active_info_matrix() && e.priority > 1e-8f;
+                                e.active   = e.priority > 1e-8f;
                                 node.get_info(e.info);
 #ifdef OPENMP
                                 #pragma omp critical
