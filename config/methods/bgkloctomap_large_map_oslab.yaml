@@ -7,7 +7,7 @@ topic: /occupied_cells_vis_array
 resolution: 0.2
 block_depth: 5 # Test-data octree depth (see Wang & Englot ICRA 2016)
 max_range: 20 # Sensor max range (m)
-max_vis_radius: 0 # Visualization sphere radius around the robot (m); 0 = unlimited
+max_vis_radius: 0.0 # Visualization sphere radius around the robot (m); 0 = unlimited
 original_size: true 
 
 # Bounds on map height
@@ -16,11 +16,11 @@ max_z: 3.0
 
 # Kernel parameters
 sf2: 1.0
-ell: 0.3
+ell: 0.1
 
 # Sampling resolutions
-free_resolution: 0.2 #6.5 for block depth 5, 3.25 for block depth 4, 13 for depth 6
-ds_resolution: 0.2  # Downsampling factor
+free_resolution: 0.4 #6.5 for block depth 5, 3.25 for block depth 4, 13 for depth 6
+ds_resolution: 0.1  # Downsampling factor
 swath_angle: 120.0  # Total multibeam swath width (degrees); -1 = disabled (azimuth culling off)
 
 # Free/Occupied Thresholds
@@ -40,7 +40,7 @@ coarse_depth_steps: 1
 # When true, replaces per-voxel w_novelty in the Beta update with a per-frame w_pose
 # computed from distance between current sonar pose and a history of K prior poses.
 # The per-voxel w_novelty is still computed for the info matrix and NBV planner.
-use_pose_level_weighting: true   # false = per-voxel mode (backward compat default)
+use_pose_level_weighting: false   # false = per-voxel mode (backward compat default)
 pose_history_size: 20             # K: rolling history length
 pose_novelty_sigma: 0.3           # Gaussian bandwidth in SE(3) distance space
 pose_w_roll:       1.0            # Weight for roll component of SO(3) distance

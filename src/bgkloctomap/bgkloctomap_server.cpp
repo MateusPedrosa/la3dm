@@ -61,6 +61,7 @@ float prior_B = 1.0f;
 float theta_bw = 0.6f * 3.1415926f / 180.0f;
 float phi_bw = 20.0f * 3.1415926f / 180.0f;
 bool free_ray_range_weight = false;
+float swath_angle = -1.0f;  // Total multibeam swath width (degrees); -1 = azimuth culling disabled
 
 // ---- Pose-level novelty weighting parameters ----
 bool  use_pose_level_weighting = false;
@@ -77,7 +78,7 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
     tf::StampedTransform transform;
     try {
-        listener->lookupTransform(frame_id, cloud->header.frame_id, ros::Time(0), transform);
+        listener->lookupTransform(frame_id, cloud->header.frame_id, cloud->header.stamp, transform);
     } catch (tf::TransformException ex) {
         ROS_WARN_THROTTLE(1.0, "Waiting for TF: %s", ex.what());
         return;
@@ -423,6 +424,7 @@ int main(int argc, char **argv) {
     nh.param<float>("theta_bw",    theta_bw,    theta_bw);
     nh.param<float>("phi_bw",      phi_bw,      phi_bw);
     nh.param<bool>("free_ray_range_weight", free_ray_range_weight, free_ray_range_weight);
+    nh.param<float>("swath_angle", swath_angle, swath_angle);
 
     // Pose-level novelty weighting
     nh.param<bool> ("use_pose_level_weighting", use_pose_level_weighting, use_pose_level_weighting);
@@ -459,6 +461,7 @@ int main(int argc, char **argv) {
             "theta_bw: " << theta_bw << std::endl <<
             "phi_bw: " << phi_bw << std::endl <<
             "free_ray_range_weight: " << free_ray_range_weight << std::endl <<
+            "swath_angle: " << swath_angle << std::endl <<
             "coarse_depth_steps: " << coarse_depth_steps << std::endl <<
             "use_pose_level_weighting: " << use_pose_level_weighting << std::endl <<
             "pose_history_size: " << pose_history_size << std::endl <<
@@ -472,6 +475,8 @@ int main(int argc, char **argv) {
                                         pose_novelty_sigma,
                                         pose_w_roll, pose_w_pitch, pose_w_yaw,
                                         pose_w_vx_l2, pose_w_vy_l2, pose_w_vz_l2);
+
+    map->configure_frustum(swath_angle);
 
     ros::Subscriber point_sub = nh.subscribe<sensor_msgs::PointCloud2>(cloud_topic, 1, cloudHandler);
     m_pub_occ = new la3dm::MarkerArrayPub(nh, map_topic_occ, resolution, {"map"}, frame_id);

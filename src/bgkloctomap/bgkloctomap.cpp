@@ -90,6 +90,13 @@ namespace la3dm {
         pose_w_[5] = w_vz_l2;
     }
 
+    void BGKLOctoMap::configure_frustum(float swath_angle_deg) {
+        if (swath_angle_deg <= 0.0f)
+            swath_half_angle_ = (float)M_PI;  // disabled — no azimuth culling
+        else
+            swath_half_angle_ = (swath_angle_deg * 0.5f) * (float)M_PI / 180.0f;
+    }
+
     void BGKLOctoMap::update_pose_history_(float px, float py, float pz,
                                            float qx, float qy, float qz, float qw) {
         PoseEntry e;
@@ -178,28 +185,22 @@ namespace la3dm {
                               (double)w_pose_frame, pose_history_.size());
         }
 
+        // Derive sensor forward direction (X-axis) from quaternion
+        point3f forward_hat(
+            1.0f - 2.0f*(qy*qy + qz*qz),
+            2.0f*(qx*qy + qz*qw),
+            2.0f*(qx*qz - qy*qw)
+        );
+
         ////////// Preparation //////////////////////////
         /////////////////////////////////////////////////
         GPLineCloud xy;
         GPLineCloud rays;
         vector<int> ray_idx;
-        // const int ray_size = rays.size();
-        // std::array<int, ray_size> ray_keys;
         get_training_data(cloud, origin, ds_resolution, free_res, max_range, xy, rays, ray_idx);
-        // vector<int> ray_keys(rays.size(), 0);
         assert (ray_idx.size() == xy.size());
-        // std::cout << "N rays: " << rays.size() << std::endl;
-        // std::cout << "vec size: " << ray_keys.size() << std::endl;
-#ifdef DEBUG
-        Debug_Msg("Training data size: " << xy.size());
-#endif
 
-        // Prevent Segfault if training data is completely empty
         if (xy.empty()) {
-            #ifdef DEBUG
-            Debug_Msg("Training data empty after filtering. Skipping map update.");
-            #endif
-            // ROS_INFO_STREAM("Training data empty after filtering. Skipping map update!!!!!!!!!!!!!!!!!");
             return; 
         }
 
@@ -207,7 +208,7 @@ namespace la3dm {
         bbox(xy, lim_min, lim_max);
 
         vector<BlockHashKey> blocks;
-        get_blocks_in_bbox(lim_min, lim_max, blocks);
+        get_blocks_in_bbox(lim_min, lim_max, blocks, origin, sensor_up, forward_hat);
 
         // std::unordered_map<BlockHashKey, GPLineCloud> key_train_data_map;
         for (int k = 0; k < xy.size(); ++k) {
@@ -435,6 +436,13 @@ namespace la3dm {
         }
         result.w_pose = w_pose_frame;
 
+        // Derive sensor forward direction (X-axis) from quaternion
+        point3f forward_hat(
+            1.0f - 2.0f*(qy*qy + qz*qz),
+            2.0f*(qx*qy + qz*qw),
+            2.0f*(qx*qz - qy*qw)
+        );
+
         ////////// Preparation //////////////////////////
         GPLineCloud xy;
         GPLineCloud rays;
@@ -449,7 +457,7 @@ namespace la3dm {
         bbox(xy, lim_min, lim_max);
 
         vector<BlockHashKey> blocks;
-        get_blocks_in_bbox(lim_min, lim_max, blocks);
+        get_blocks_in_bbox(lim_min, lim_max, blocks, origin, sensor_up, forward_hat);
 
         for (int k = 0; k < (int)xy.size(); ++k) {
             float p[] = {xy[k].first.x0(), xy[k].first.y0(), xy[k].first.z0()};
@@ -602,6 +610,7 @@ namespace la3dm {
                                 e.pos      = node_loc;
                                 e.priority = node.get_var();
                                 e.active   = e.priority > 1e-8f;
+                                e.state    = node.get_state();
                                 node.get_info(e.info);
 #ifdef OPENMP
                                 #pragma omp critical
@@ -789,12 +798,57 @@ namespace la3dm {
     }
 
     void BGKLOctoMap::get_blocks_in_bbox(const point3f &lim_min, const point3f &lim_max,
-                                   vector<BlockHashKey> &blocks) const {
+                                   vector<BlockHashKey> &blocks,
+                                   const point3f &origin,
+                                   const point3f &sensor_up,
+                                   const point3f &forward_hat) const {
         // Symmetrical 2-block padding to support wide vertical apertures
-        float pad = 2.0f * block_size; 
+        float pad = 2.0f * block_size;
+
+        // Precompute frustum limits.
+        // Elevation: always on (phi_bw / 2).  Azimuth: on when swath_half_angle_ < π.
+        const bool do_azimuth = (swath_half_angle_ < (float)M_PI - 1e-4f);
+
+        // Project forward_hat onto the swath plane (perpendicular to sensor_up).
+        // Done once per scan, not per block.
+        point3f fwd_horiz;
+        float fwd_horiz_norm = 0.0f;
+        if (do_azimuth) {
+            fwd_horiz = forward_hat - sensor_up * forward_hat.dot(sensor_up);
+            fwd_horiz_norm = fwd_horiz.norm();
+        }
+
         for (float x = lim_min.x() - pad; x <= lim_max.x() + pad; x += block_size) {
             for (float y = lim_min.y() - pad; y <= lim_max.y() + pad; y += block_size) {
                 for (float z = lim_min.z() - pad; z <= lim_max.z() + pad; z += block_size) {
+
+                    // ---- Frustum culling ----
+                    point3f bc(x, y, z);
+                    point3f v = bc - origin;
+                    float dist = v.norm();
+
+                    if (dist > 1e-3f) {
+                        // Angular slack = solid angle subtended by half-diagonal of block
+                        float slack = std::atan2(block_size * 0.866f, dist);
+
+                        // Elevation test (always active)
+                        float sin_elev = v.dot(sensor_up) / dist;
+                        if (std::abs(sin_elev) > std::sin(phi_bw * 0.5f + slack))
+                            continue;
+
+                        // Azimuth test (active when swath_angle configured)
+                        if (do_azimuth && fwd_horiz_norm > 1e-6f) {
+                            point3f v_horiz = v - sensor_up * v.dot(sensor_up);
+                            float v_horiz_norm = v_horiz.norm();
+                            if (v_horiz_norm > 1e-6f) {
+                                float cos_az = v_horiz.dot(fwd_horiz) /
+                                               (v_horiz_norm * fwd_horiz_norm);
+                                if (cos_az < std::cos(swath_half_angle_ + slack))
+                                    continue;
+                            }
+                        }
+                    }
+
                     blocks.push_back(block_to_hash_key(x, y, z));
                 }
             }

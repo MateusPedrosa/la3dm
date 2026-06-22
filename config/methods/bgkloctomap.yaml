@@ -14,6 +14,7 @@ ell: 0.2 # Length scale of the sparse kernel
 # Sampling resolutions
 free_resolution: 0.3 # Free space sampling res
 ds_resolution: 0.1  # Downsampling factor
+swath_angle: -1.0   # Total multibeam swath width (degrees); -1 = disabled (azimuth culling off)
 
 # Free/Occupied Thresholds
 free_thresh: 0.3

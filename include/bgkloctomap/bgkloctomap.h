@@ -140,10 +140,11 @@ namespace la3dm {
         /// Callers accumulate these into a dirty buffer so that computePriorityCache()
         /// can update the candidate index incrementally instead of re-scanning all leaves.
         struct DirtyEntry {
-            point3f pos;        // world-frame voxel centre
-            float   priority;   // node.get_var() after update
-            float   info[6];    // raw symmetric info matrix [Ixx,Ixy,Ixz,Iyy,Iyz,Izz]
-            bool    active;     // has_active_info_matrix() && priority > 1e-8f
+            point3f      pos;        // world-frame voxel centre
+            float        priority;   // node.get_var() after update
+            float        info[6];    // raw symmetric info matrix [Ixx,Ixy,Ixz,Iyy,Iyz,Izz]
+            bool         active;     // has_active_info_matrix() && priority > 1e-8f
+            la3dm::State state;      // OCCUPIED / FREE / UNKNOWN
         };
 
         /// Write phase: prediction loop + node.update(). Must be called under unique_lock(ot_mutex_).
@@ -158,6 +159,12 @@ namespace la3dm {
         void configure_pose_level_weighting(bool enabled, int K, float sigma,
                                             float w_roll, float w_pitch, float w_yaw,
                                             float w_vx_l2, float w_vy_l2, float w_vz_l2);
+
+        /// Configure frustum-based block culling. Call once after construction.
+        /// @param swath_angle_deg  Total multibeam swath width in degrees
+        ///                         (e.g. 120 degrees). Pass <= 0 to disable azimuth
+        ///                         culling (elevation culling via phi_bw is always on).
+        void configure_frustum(float swath_angle_deg);
 
         void insert_training_data(const GPLineCloud &cloud);
 
@@ -491,9 +498,12 @@ namespace la3dm {
         /// Get the bounding box of a pointcloud.
         void bbox(const GPLineCloud &cloud, point3f &lim_min, point3f &lim_max) const;
 
-        /// Get all block indices inside a bounding box.
+        /// Get all block indices inside a bounding box, with optional frustum culling.
         void get_blocks_in_bbox(const point3f &lim_min, const point3f &lim_max,
-                                std::vector<BlockHashKey> &blocks) const;
+                                std::vector<BlockHashKey> &blocks,
+                                const point3f &origin,
+                                const point3f &sensor_up,
+                                const point3f &forward_hat) const;
 
         /// Get all points inside a bounding box assuming pointcloud has been inserted in rtree before.
         int get_gp_points_in_bbox(const point3f &lim_min, const point3f &lim_max,
@@ -547,6 +557,11 @@ namespace la3dm {
         float pose_novelty_sigma_ = 0.3f;
         // W diagonal: [w_roll, w_pitch, w_yaw, w_vx/l², w_vy/l², w_vz/l²]
         float pose_w_[6] = {1.0f, 0.6f, 0.05f, 0.2f, 0.05f, 0.5f};
+
+        // ---- Frustum culling ----
+        // swath_half_angle_ is half the total multibeam swath angle in radians.
+        // Defaults to M_PI (no azimuth culling). Elevation culling uses phi_bw always.
+        float swath_half_angle_ = (float)M_PI;
 
         float compute_w_pose_(float px, float py, float pz,
                               float qx, float qy, float qz, float qw) const;
