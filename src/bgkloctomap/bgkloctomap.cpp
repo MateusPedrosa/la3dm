@@ -354,16 +354,17 @@ namespace la3dm {
                             // Capture new-voxel flag BEFORE info matrix update
                             bool is_new_voxel = (node.get_lambda_max_cache() < 1e-9f);
 
-                            // w_novelty still computed — needed for info matrix (NBV planner)
-                            float w_novelty = node.compute_w_novelty(n_vec);
+                            float w_voxel = node.compute_w_novelty(n_vec);  // pre-update
 
-                            float w_range = 1.0f / (obs_range * obs_range + 1.0f);
+                            float w_range = 1.0f / (obs_range + 1.0f);
                             if (w_range < 0.05f) w_range = 0.05f;
-                            node.update_info_matrix(n_vec, w_range);
+                            float w_total = w_range * w_voxel;
+                            node.update_info_matrix(n_vec, w_total);
+                            node.check_deallocation(los_hat);
 
                             float w_beta = pose_level_weighting_
                                            ? (is_new_voxel ? 1.0f : w_pose_frame)
-                                           : w_novelty;
+                                           : w_total;
                             if (w_beta > 1e-8f)
                                 node.update(ybar[j] * w_beta, kbar[j] * w_beta, obs_range);
                         } else {
@@ -593,15 +594,17 @@ namespace la3dm {
                         if (valid_n) {
                             bool is_new_voxel = (node.get_lambda_max_cache() < 1e-9f);
 
-                            float w_novelty = node.compute_w_novelty(n_vec);
+                            float w_voxel = node.compute_w_novelty(n_vec);  // pre-update
 
-                            float w_range = 1.0f / (obs_range * obs_range + 1.0f);
+                            float w_range = 1.0f / (obs_range + 1.0f);
                             if (w_range < 0.05f) w_range = 0.05f;
-                            node.update_info_matrix(n_vec, w_range);
+                            float w_total = w_range * w_voxel;
+                            node.update_info_matrix(n_vec, w_total);
+                            node.check_deallocation(los_hat);
 
                             float w_beta = pose_level_weighting_
                                            ? (is_new_voxel ? 1.0f : upd.w_pose)
-                                           : w_novelty;
+                                           : w_total;
                             if (w_beta > 1e-8f)
                                 node.update(ybar[j] * w_beta, kbar[j] * w_beta, obs_range);
 

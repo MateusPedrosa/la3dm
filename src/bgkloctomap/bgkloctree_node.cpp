@@ -12,6 +12,9 @@ namespace la3dm {
     float Occupancy::var_thresh = 1000.0f;
     float Occupancy::prior_A = 0.5f;
     float Occupancy::prior_B = 0.5f;
+    float Occupancy::tau_var  = 0.01f;
+    float Occupancy::tau_info = 2.0f;
+    float Occupancy::delta    = 0.05f;
     Occupancy::Occupancy(float A, float B)
         : m_A(Occupancy::prior_A + A), m_B(Occupancy::prior_B + B),
           classified(false), is_trusted(false),
@@ -139,6 +142,23 @@ namespace la3dm {
                                        point3f &v_weak) const
     {
         compute_2d_eigenstruct_impl(info, los, lam1, lam2, v_weak);
+    }
+
+    void Occupancy::compute_2d_eigenstruct_raw(const float info[6], const point3f &los,
+                                               float &lam1, float &lam2, point3f &v_weak)
+    {
+        compute_2d_eigenstruct_impl(info, los, lam1, lam2, v_weak);
+    }
+
+    void Occupancy::check_deallocation(const point3f &los_hat)
+    {
+        if (info_constrained) return;
+        if (get_var() >= tau_var) return;
+        float lam1, lam2;
+        point3f v_weak;
+        get_2d_eigenstruct(los_hat, lam1, lam2, v_weak);
+        if (lam2 >= (1.0f - delta) * tau_info)
+            info_constrained = true;
     }
 
     std::ofstream &operator<<(std::ofstream &os, const Occupancy &oc) {

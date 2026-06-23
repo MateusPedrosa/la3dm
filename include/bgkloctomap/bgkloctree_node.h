@@ -102,7 +102,7 @@ namespace la3dm {
         /*
          * @brief Compute per-voxel novelty weight for a new observation.
          *
-         * w_novelty = 1 - (nᵀ I(p) n) / (λ_max_cache + ε)
+         * w_voxel = max(0, 1 - (nᵀ I(p) n) / W_sat)   where W_sat = tau_info
          *
          * Returns 1.0 for new voxels (zero info matrix → full evidence weight).
          * Returns 0.0 if voxel is marked as well-constrained (info_constrained).
@@ -114,30 +114,29 @@ namespace la3dm {
             float nIn = info[0]*n.x()*n.x() + info[3]*n.y()*n.y() + info[5]*n.z()*n.z()
                       + 2.0f*info[1]*n.x()*n.y() + 2.0f*info[2]*n.x()*n.z()
                       + 2.0f*info[4]*n.y()*n.z();
-            float w = 1.0f - nIn / (lambda_max_cache + 1e-6f);
+            float w = 1.0f - nIn / (tau_info + 1e-6f);
             return (w < 0.0f) ? 0.0f : ((w > 1.0f) ? 1.0f : w);
         }
 
         /*
          * @brief Rank-1 update of the information matrix.
          *
-         * I(p) ← I(p) + w_range · n nᵀ
+         * I(p) ← I(p) + w · n nᵀ
          * lambda_max_cache ← trace(I)  (upper bound on λ_max)
          *
-         * Uses w_range only (NOT w_novelty) to avoid circular feedback.
          * No-op if voxel is marked as well-constrained.
          *
-         * @param n       Unit constraint direction vector in world frame.
-         * @param w_range Range-dependent quality weight for this observation.
+         * @param n  Unit constraint direction vector in world frame.
+         * @param w  Gated evidence weight w_total = w_r * w_voxel for this observation.
          */
-        inline void update_info_matrix(const point3f &n, float w_range) {
+        inline void update_info_matrix(const point3f &n, float w) {
             if (info_constrained) return;
-            info[0] += w_range * n.x() * n.x();
-            info[1] += w_range * n.x() * n.y();
-            info[2] += w_range * n.x() * n.z();
-            info[3] += w_range * n.y() * n.y();
-            info[4] += w_range * n.y() * n.z();
-            info[5] += w_range * n.z() * n.z();
+            info[0] += w * n.x() * n.x();
+            info[1] += w * n.x() * n.y();
+            info[2] += w * n.x() * n.z();
+            info[3] += w * n.y() * n.y();
+            info[4] += w * n.y() * n.z();
+            info[5] += w * n.z() * n.z();
             lambda_max_cache = info[0] + info[3] + info[5];  // trace = upper bound on λ_max
         }
 
@@ -193,7 +192,8 @@ namespace la3dm {
         // Public so they can be set from external code (e.g. the ROS server node)
         // before any voxels are updated.
         static float tau_var;   // Beta variance threshold for lifecycle deallocation (default 0.01)
-        static float tau_info;  // Min eigenvalue threshold for lifecycle deallocation (default 0.5)
+        static float tau_info;  // W_sat: saturation constant for novelty weight and deallocation (default 0.5)
+        static float delta;     // deallocation tolerance: constrained when lambda2 >= (1-delta)*tau_info (default 0.05)
 
     private:
         float m_A;

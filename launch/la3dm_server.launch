@@ -9,8 +9,8 @@
           args="0 0 0 1.5708 0 3.14159 odom ned_origin 100"/> -->
 
     <!-- Gemini 1200ikd -->
-    <node pkg="tf" type="static_transform_publisher" name="camera_to_sonar_link"
-          args="0 -0.05 -0.05 0 1.5708 -1.5708 stereo_left sonar_link 100" output="screen"/>
+    <!-- <node pkg="tf" type="static_transform_publisher" name="camera_to_sonar_link"
+          args="0 -0.05 -0.05 0 1.5708 -1.5708 stereo_left sonar_link 100" output="screen"/> -->
 
     <!-- <node pkg="tf" type="static_transform_publisher" name="camera_to_sonar_link"
           args="0 -0.35 0.0 1.5708 1.5708 0.0 camera_link sonar_link 100" output="screen"/> -->
