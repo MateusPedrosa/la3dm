@@ -16,7 +16,7 @@ max_z: 3.0
 
 # Kernel parameters
 sf2: 1.0
-ell: 0.3
+ell: 0.2
 
 # Sampling resolutions
 free_resolution: 0.1 #6.5 for block depth 5, 3.25 for block depth 4, 13 for depth 6
@@ -25,7 +25,7 @@ swath_angle: 120.0  # Total multibeam swath width (degrees); -1 = disabled (azim
 
 # Free/Occupied Thresholds
 free_thresh: 0.3
-occupied_thresh: 0.55
+occupied_thresh: 0.7
 
 # BGKL parameters
 prior_A: 0.001 # Positive class (occupied)
@@ -41,7 +41,7 @@ free_ray_range_weight: false # If true, apply range weight to free-ray kernel ev
 #   observations you want before that direction saturates, and w_r_ref is the range weight
 #   at your typical observation range (w_r = 1/(r^2+1), min-clamped at 0.05).
 #   Example: N=20 observations at r=5m → w_r=1/26≈0.038 (clamped to 0.05) → tau_info ≈ 20*0.05/2.3 ≈ 0.43
-tau_info: 2.0
+tau_info: 0.5
 
 # tau_var: Beta variance threshold for the deallocation criterion.
 #   A voxel's info matrix is only marked as constrained (and stops tracking direction)
@@ -54,6 +54,12 @@ tau_var: 0.01
 #   A voxel is declared directionally constrained when lambda2 >= (1-delta)*tau_info.
 #   Smaller delta = stricter (more observations needed); larger delta = looser.
 delta: 0.05
+
+# Visualization scaling parameters
+max_var_vis:   0.25   # Variance at which color saturates to red (prior ≈ 0.249, so 0.25 = full range)
+var_vis_gamma: 2.0    # Power applied to t=var/max_var_vis before color mapping.
+                      # 1.0 = linear; >1 stretches red→yellow (yellow appears at higher variance);
+                      # try 2.0–3.0 if everything looks red
 
 # Coarse occupied-voxel visualization for path-planner safety margin
 # Publishes to /occupied_cells_coarse_vis_array with voxel side = resolution * 2^N
@@ -72,3 +78,13 @@ pose_w_yaw:        0.05           # Weight for yaw (low: sonar often spins)
 pose_w_vx_per_l2:  0.2            # Weight for longitudinal displacement / l²
 pose_w_vy_per_l2:  0.05           # Weight for lateral displacement / l²
 pose_w_vz_per_l2:  0.5            # Weight for vertical displacement / l²
+
+# Ablation flags (for experiments — disable in production)
+ablate_directional_weights: false  # true: skip w_range, w_voxel, and info-matrix update; raw Beta accumulation
+
+# Per-voxel debug tracing — prints update internals for the voxel nearest (x,y,z) each scan
+# Look for [dbg_voxel] lines in rosout. Disable in production.
+debug_voxel_enable: false
+debug_voxel_x: 0.0
+debug_voxel_y: 0.0
+debug_voxel_z: 0.0

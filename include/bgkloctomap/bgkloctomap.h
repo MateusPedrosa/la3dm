@@ -160,6 +160,16 @@ namespace la3dm {
                                             float w_roll, float w_pitch, float w_yaw,
                                             float w_vx_l2, float w_vy_l2, float w_vz_l2);
 
+        /// Ablation: disable w_range, w_voxel, and the info-matrix update.
+        /// When true, Beta accumulates raw (unweighted) counts only.
+        void set_ablate_directional_weights(bool v) { ablate_directional_weights_ = v; }
+
+        /// Debug: log every update to the voxel nearest (x,y,z) each scan.
+        void set_debug_voxel(bool enabled, float x, float y, float z) {
+            debug_voxel_enabled_ = enabled;
+            debug_voxel_x_ = x; debug_voxel_y_ = y; debug_voxel_z_ = z;
+        }
+
         /// Configure frustum-based block culling. Call once after construction.
         /// @param swath_angle_deg  Total multibeam swath width in degrees
         ///                         (e.g. 120 degrees). Pass <= 0 to disable azimuth
@@ -557,6 +567,15 @@ namespace la3dm {
         float pose_novelty_sigma_ = 0.3f;
         // W diagonal: [w_roll, w_pitch, w_yaw, w_vx/l², w_vy/l², w_vz/l²]
         float pose_w_[6] = {1.0f, 0.6f, 0.05f, 0.2f, 0.05f, 0.5f};
+
+        // ---- Ablation ----
+        bool ablate_directional_weights_ = false;
+
+        // ---- Per-voxel debug tracing ----
+        bool  debug_voxel_enabled_ = false;
+        float debug_voxel_x_       = 0.0f;
+        float debug_voxel_y_       = 0.0f;
+        float debug_voxel_z_       = 0.0f;
 
         // ---- Frustum culling ----
         // swath_half_angle_ is half the total multibeam swath angle in radians.

@@ -4,6 +4,7 @@
 #include <ros/ros.h>
 #include <pcl_ros/transforms.h>
 #include <geometry_msgs/PoseArray.h>
+#include <geometry_msgs/PointStamped.h>
 #include "markerarray_pub.h"
 #include "bgkloctomap.h"
 
@@ -11,7 +12,7 @@ tf::TransformListener *listener;
 std::string frame_id("/odom");
 la3dm::BGKLOctoMap *map;
 
-la3dm::MarkerArrayPub *m_pub_occ, *m_pub_free, *m_pub_unc, *m_pub_unk, *m_pub_var, *m_pub_occ_coarse, *m_pub_constraint;
+la3dm::MarkerArrayPub *m_pub_occ, *m_pub_free, *m_pub_unc, *m_pub_unk, *m_pub_var, *m_pub_alpha_beta, *m_pub_occ_coarse, *m_pub_constraint;
 la3dm::TextMarkerArrayPub *m_pub_free_txt, *m_pub_occ_txt, *m_pub_unk_txt;
 ros::Publisher viewpoints_pub;
 
@@ -36,6 +37,7 @@ std::string map_topic_unk_txt("/unknown_cells_txt_vis_array");
 std::string map_topic_unc("/uncertain_cells_vis_array");
 std::string map_topic_unk("/unknown_cells_vis_array");
 std::string map_topic_var("/variance_vis_array");
+std::string map_topic_alpha_beta("/alpha_beta_vis_array");
 std::string map_topic_constraint("/constraint_vis_array");
 double max_range = 4.0;
 double resolution = 0.1;
@@ -50,6 +52,7 @@ double min_z = 0;
 double max_z = 0;
 bool original_size = true;
 double max_var_vis = 0.25;
+double var_vis_gamma = 1.0;   // power applied to t before color mapping; >1 stretches red→yellow range
 double max_constraint_vis = 5.0;
 double max_vis_radius = 40.0; // Visualization sphere radius (m); 0 = unlimited
 double viz_rate = 1.5;        // Visualization publish rate (Hz); decoupled from sonar callback
@@ -62,9 +65,12 @@ float theta_bw = 0.6f * 3.1415926f / 180.0f;
 float phi_bw = 20.0f * 3.1415926f / 180.0f;
 bool free_ray_range_weight = false;
 float swath_angle = -1.0f;  // Total multibeam swath width (degrees); -1 = azimuth culling disabled
+float tau_info = 2.0f;
+float tau_var  = 0.01f;
+float delta    = 0.05f;
 
 // ---- Pose-level novelty weighting parameters ----
-bool  use_pose_level_weighting = false;
+bool  use_pose_level_weighting    = false;
 int   pose_history_size        = 20;
 float pose_novelty_sigma       = 0.3f;
 float pose_w_roll              = 1.0f;
@@ -73,6 +79,23 @@ float pose_w_yaw               = 0.05f;
 float pose_w_vx_l2             = 0.2f;
 float pose_w_vy_l2             = 0.05f;
 float pose_w_vz_l2             = 0.5f;
+
+// ---- Ablation flags ----
+bool  ablate_directional_weights = false;
+
+// ---- Per-voxel debug tracing ----
+bool  debug_voxel_enable = false;
+float debug_voxel_x = 0.0f, debug_voxel_y = 0.0f, debug_voxel_z = 0.0f;
+
+void clickedPointHandler(const geometry_msgs::PointStamped::ConstPtr &msg) {
+    debug_voxel_x = (float)msg->point.x;
+    debug_voxel_y = (float)msg->point.y;
+    debug_voxel_z = (float)msg->point.z;
+    debug_voxel_enable = true;
+    map->set_debug_voxel(true, debug_voxel_x, debug_voxel_y, debug_voxel_z);
+    ROS_INFO("[dbg_voxel] now tracing voxel near (%.3f, %.3f, %.3f)",
+             debug_voxel_x, debug_voxel_y, debug_voxel_z);
+}
 
 void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
@@ -162,6 +185,7 @@ void publishMapVisualization(const ros::TimerEvent&) {
         m_pub_unc->clear();
         m_pub_unk->clear();
         m_pub_var->clear();
+        m_pub_alpha_beta->clear();
         m_pub_constraint->clear();
 
         float max_vis_radius_sq = (max_vis_radius > 0) ? (float)(max_vis_radius * max_vis_radius) : -1.0f;
@@ -336,10 +360,13 @@ void publishMapVisualization(const ros::TimerEvent&) {
             auto state = it.get_node().get_state();
             if (state == la3dm::State::OCCUPIED || state == la3dm::State::UNCERTAIN) {
                 std::string ns = (state == la3dm::State::OCCUPIED) ? "occupied" : "uncertain";
-                float t = (float)std::min(std::max(it.get_node().get_var() / (float)max_var_vis, 0.0f), 1.0f);
+                float t = (float)std::min(std::max(std::pow(it.get_node().get_var() / (float)max_var_vis, (float)var_vis_gamma), 0.0f), 1.0f);
+                float A = it.get_node().get_A();
+                float B = it.get_node().get_B();
                 if (original_size)
                 {
                     m_pub_var->insert_point3d_color(p.x(), p.y(), p.z(), it.get_size(), t, 1.0f - t, 0.0f, 1.0f, ns);
+                    m_pub_alpha_beta->insert_point3d_color(p.x(), p.y(), p.z(), it.get_size(), A, B, 0.0f, 1.0f, ns);
                 }
                 else
                 {
@@ -347,6 +374,7 @@ void publishMapVisualization(const ros::TimerEvent&) {
                     for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
                     {
                         m_pub_var->insert_point3d_color(n->x(), n->y(), n->z(), map->get_resolution(), t, 1.0f - t, 0.0f, 1.0f, ns);
+                        m_pub_alpha_beta->insert_point3d_color(n->x(), n->y(), n->z(), map->get_resolution(), A, B, 0.0f, 1.0f, ns);
                     }
                 }
             }
@@ -379,6 +407,7 @@ void publishMapVisualization(const ros::TimerEvent&) {
         m_pub_unc->publish();
         m_pub_unk->publish();
         m_pub_var->publish();
+        m_pub_alpha_beta->publish();
         m_pub_constraint->publish();
 
         ros::Time end2 = ros::Time::now();
@@ -409,7 +438,8 @@ int main(int argc, char **argv) {
     nh.param<double>("min_z", min_z, min_z);
     nh.param<double>("max_z", max_z, max_z);
     nh.param<bool>("original_size", original_size, original_size);
-    nh.param<double>("max_var_vis", max_var_vis, max_var_vis);
+    nh.param<double>("max_var_vis",       max_var_vis,       max_var_vis);
+    nh.param<double>("var_vis_gamma",     var_vis_gamma,     var_vis_gamma);
     nh.param<double>("max_constraint_vis", max_constraint_vis, max_constraint_vis);
     nh.param<double>("max_vis_radius", max_vis_radius, max_vis_radius);
     nh.param<double>("viz_rate", viz_rate, viz_rate);
@@ -425,6 +455,9 @@ int main(int argc, char **argv) {
     nh.param<float>("phi_bw",      phi_bw,      phi_bw);
     nh.param<bool>("free_ray_range_weight", free_ray_range_weight, free_ray_range_weight);
     nh.param<float>("swath_angle", swath_angle, swath_angle);
+    nh.param<float>("tau_info", tau_info, tau_info);
+    nh.param<float>("tau_var",  tau_var,  tau_var);
+    nh.param<float>("delta",    delta,    delta);
 
     // Pose-level novelty weighting
     nh.param<bool> ("use_pose_level_weighting", use_pose_level_weighting, use_pose_level_weighting);
@@ -436,6 +469,15 @@ int main(int argc, char **argv) {
     nh.param<float>("pose_w_vx_per_l2",           pose_w_vx_l2,             pose_w_vx_l2);
     nh.param<float>("pose_w_vy_per_l2",           pose_w_vy_l2,             pose_w_vy_l2);
     nh.param<float>("pose_w_vz_per_l2",           pose_w_vz_l2,             pose_w_vz_l2);
+
+    // Ablation flags
+    nh.param<bool>("ablate_directional_weights", ablate_directional_weights, ablate_directional_weights);
+
+    // Per-voxel debug tracing
+    nh.param<bool> ("debug_voxel_enable", debug_voxel_enable, debug_voxel_enable);
+    nh.param<float>("debug_voxel_x",      debug_voxel_x,      debug_voxel_x);
+    nh.param<float>("debug_voxel_y",      debug_voxel_y,      debug_voxel_y);
+    nh.param<float>("debug_voxel_z",      debug_voxel_z,      debug_voxel_z);
 
     ROS_INFO_STREAM("Parameters:" << std::endl <<
             "frame_id: " << frame_id << std::endl <<
@@ -465,7 +507,11 @@ int main(int argc, char **argv) {
             "coarse_depth_steps: " << coarse_depth_steps << std::endl <<
             "use_pose_level_weighting: " << use_pose_level_weighting << std::endl <<
             "pose_history_size: " << pose_history_size << std::endl <<
-            "pose_novelty_sigma: " << pose_novelty_sigma
+            "pose_novelty_sigma: " << pose_novelty_sigma << std::endl <<
+            "ablate_directional_weights: " << ablate_directional_weights << std::endl <<
+            "tau_info: " << tau_info << std::endl <<
+            "tau_var: "  << tau_var  << std::endl <<
+            "delta: "    << delta
             );
 
     map = new la3dm::BGKLOctoMap(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh,
@@ -475,10 +521,16 @@ int main(int argc, char **argv) {
                                         pose_novelty_sigma,
                                         pose_w_roll, pose_w_pitch, pose_w_yaw,
                                         pose_w_vx_l2, pose_w_vy_l2, pose_w_vz_l2);
+    map->set_ablate_directional_weights(ablate_directional_weights);
+    map->set_debug_voxel(debug_voxel_enable, debug_voxel_x, debug_voxel_y, debug_voxel_z);
+    la3dm::OcTreeNode::tau_info = tau_info;
+    la3dm::OcTreeNode::tau_var  = tau_var;
+    la3dm::OcTreeNode::delta    = delta;
 
     map->configure_frustum(swath_angle);
 
     ros::Subscriber point_sub = nh.subscribe<sensor_msgs::PointCloud2>(cloud_topic, 1, cloudHandler);
+    ros::Subscriber clicked_sub = nh.subscribe<geometry_msgs::PointStamped>("/clicked_point", 1, clickedPointHandler);
     m_pub_occ = new la3dm::MarkerArrayPub(nh, map_topic_occ, resolution, {"map"}, frame_id);
     m_pub_occ_coarse = new la3dm::MarkerArrayPub(nh, map_topic_occ_coarse, resolution, {"map"}, frame_id);
     m_pub_free = new la3dm::MarkerArrayPub(nh, map_topic_free, resolution, {"map"}, frame_id);
@@ -488,6 +540,7 @@ int main(int argc, char **argv) {
     m_pub_unc = new la3dm::MarkerArrayPub(nh, map_topic_unc, resolution, {"map"}, frame_id);
     m_pub_unk = new la3dm::MarkerArrayPub(nh, map_topic_unk, resolution, {"map"}, frame_id);
     m_pub_var = new la3dm::MarkerArrayPub(nh, map_topic_var, resolution, {"occupied", "free", "uncertain"}, frame_id);
+    m_pub_alpha_beta = new la3dm::MarkerArrayPub(nh, map_topic_alpha_beta, resolution, {"occupied", "free", "uncertain"}, frame_id);
     m_pub_constraint = new la3dm::MarkerArrayPub(nh, map_topic_constraint, resolution, {"occupied"}, frame_id);
 
     viewpoints_pub = nh.advertise<geometry_msgs::PoseArray>("viewpoints", 1, true);

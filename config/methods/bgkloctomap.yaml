@@ -46,3 +46,6 @@ pose_w_yaw:        0.05           # Weight for yaw (low: sonar often spins)
 pose_w_vx_per_l2:  0.2            # Weight for longitudinal displacement / l²
 pose_w_vy_per_l2:  0.05           # Weight for lateral displacement / l²
 pose_w_vz_per_l2:  0.5            # Weight for vertical displacement / l²
+
+# Ablation flags (for experiments — disable in production)
+ablate_directional_weights: false  # true: skip w_range, w_voxel, and info-matrix update; raw Beta accumulation

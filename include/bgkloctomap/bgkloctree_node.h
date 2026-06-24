@@ -195,6 +195,8 @@ namespace la3dm {
         static float tau_info;  // W_sat: saturation constant for novelty weight and deallocation (default 0.5)
         static float delta;     // deallocation tolerance: constrained when lambda2 >= (1-delta)*tau_info (default 0.05)
 
+        inline bool get_is_trusted() const { return is_trusted; }
+
     private:
         float m_A;
         float m_B;

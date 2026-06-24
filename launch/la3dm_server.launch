@@ -15,6 +15,10 @@
     <!-- <node pkg="tf" type="static_transform_publisher" name="camera_to_sonar_link"
           args="0 -0.35 0.0 1.5708 1.5708 0.0 camera_link sonar_link 100" output="screen"/> -->
 
+      <!-- bluerov ECHO -->
+      <node pkg="tf" type="static_transform_publisher" name="camera_to_sonar_link"
+          args="0.3 0.0 0.3 0.0 0.174533 0.0 base_link sonar_link 100" output="screen"/>
+
     <param name="/use_sim_time" value="true"/>
 
     <arg name="method" default="bgklvoctomap"/>

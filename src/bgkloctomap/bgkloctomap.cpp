@@ -350,7 +350,34 @@ namespace la3dm {
                             }
                         }
 
-                        if (valid_n) {
+                        if (debug_voxel_enabled_ &&
+                            std::fabs(node_loc.x() - debug_voxel_x_) < 0.06f &&
+                            std::fabs(node_loc.y() - debug_voxel_y_) < 0.06f &&
+                            std::fabs(node_loc.z() - debug_voxel_z_) < 0.06f) {
+                            float inf[6]; node.get_info(inf);
+                            float nIn = 0.0f;
+                            if (valid_n) {
+                                const point3f &n = n_vec;
+                                nIn = inf[0]*n.x()*n.x() + inf[3]*n.y()*n.y() + inf[5]*n.z()*n.z()
+                                    + 2.0f*inf[1]*n.x()*n.y() + 2.0f*inf[2]*n.x()*n.z()
+                                    + 2.0f*inf[4]*n.y()*n.z();
+                            }
+                            float wv = valid_n ? node.compute_w_novelty(n_vec) : 1.0f;
+                            float wr = std::max(0.05f, 1.0f / (obs_range + 1.0f));
+                            ROS_INFO_STREAM("[dbg_voxel] "
+                                << "kbar=" << kbar[j] << " ybar=" << ybar[j]
+                                << " range=" << obs_range
+                                << " nIn=" << nIn << " tau_info=" << OcTreeNode::tau_info
+                                << " w_voxel=" << wv << " w_range=" << wr
+                                << " mA=" << node.get_A() << " mB=" << node.get_B()
+                                << " trusted=" << node.get_is_trusted()
+                                << " var=" << node.get_var());
+                        }
+
+                        if (ablate_directional_weights_) {
+                            // Ablation: raw unweighted Beta accumulation, no info matrix.
+                            node.update(ybar[j], kbar[j], obs_range);
+                        } else if (valid_n) {
                             // Capture new-voxel flag BEFORE info matrix update
                             bool is_new_voxel = (node.get_lambda_max_cache() < 1e-9f);
 
@@ -591,7 +618,23 @@ namespace la3dm {
                             }
                         }
 
-                        if (valid_n) {
+                        if (ablate_directional_weights_) {
+                            // Ablation: raw unweighted Beta accumulation, no info matrix.
+                            node.update(ybar[j], kbar[j], obs_range);
+
+                            if (dirty_out) {
+                                DirtyEntry e;
+                                e.pos      = node_loc;
+                                e.priority = node.get_var();
+                                e.active   = e.priority > 1e-8f;
+                                e.state    = node.get_state();
+                                node.get_info(e.info);
+#ifdef OPENMP
+                                #pragma omp critical
+#endif
+                                dirty_out->push_back(e);
+                            }
+                        } else if (valid_n) {
                             bool is_new_voxel = (node.get_lambda_max_cache() < 1e-9f);
 
                             float w_voxel = node.compute_w_novelty(n_vec);  // pre-update
