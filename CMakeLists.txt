@@ -32,6 +32,8 @@ find_package(catkin REQUIRED COMPONENTS
         octomap_ros
 )
 
+find_package(octomap REQUIRED)
+
 ## System dependencies are found with CMake's conventions
 # find_package(Boost REQUIRED COMPONENTS system)
 
@@ -233,6 +235,10 @@ add_executable(pcd_recorder
     src/common/pcd_recorder_node.cpp
 )
 
+add_executable(octomap_static_node
+    src/octomap/octomap_static_node.cpp
+)
+
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
 # add_dependencies(BGKOctoMap_node BGKOctoMap_generate_messages_cpp)
@@ -272,6 +278,11 @@ target_link_libraries(gpoctomap_server
 
 target_link_libraries(pcd_recorder
         ${catkin_LIBRARIES}
+)
+
+target_link_libraries(octomap_static_node
+        ${catkin_LIBRARIES}
+        ${OCTOMAP_LIBRARIES}
 )
 
 link_directories(/usr/local/lib)

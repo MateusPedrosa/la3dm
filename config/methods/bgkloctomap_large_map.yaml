@@ -32,6 +32,10 @@ prior_A: 0.001 # Positive class (occupied)
 prior_B: 0.001 # Negative class (unoccupied)
 var_thresh: 100.0 # Threshold on variance to distinguish known/unknown
 free_ray_range_weight: false # If true, apply range weight to free-ray kernel evidence
+# Directional kernel bandwidths (radians). Must be explicit here so static and server
+# nodes use identical values — both fall back to their own hardcoded defaults otherwise.
+theta_bw: 0.010472  # 0.6 degrees — sonar vertical beam half-width
+phi_bw:   0.349066  # 20 degrees  — sonar horizontal swath half-width
 
 # Per-voxel directional evidence weighting (information matrix)
 # tau_info: W_sat — saturation constant for the novelty weight w_voxel = max(0, 1 - n^T I n / tau_info).

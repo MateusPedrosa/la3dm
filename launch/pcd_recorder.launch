@@ -11,7 +11,7 @@
 
     <arg name="dataset"      default="sonar_run"/>
     <arg name="data_dir"     value="$(find la3dm)/data/$(arg dataset)"/>
-    <arg name="record_rate"  default="2.0"/>
+    <arg name="record_rate"  default="0.5"/>
     <arg name="cloud_topic"  default="/sonar_point_cloud"/>
     <arg name="fixed_frame"  default="map"/>
     <arg name="sensor_frame" default="sonar_link"/>

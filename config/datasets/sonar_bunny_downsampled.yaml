@@ -1,0 +1,10 @@
+# sonar_bunny dataset config
+
+scan_num: 41
+max_range: 20.0
+
+min_z: -7.0
+max_z: 5.0
+
+original_size: false  # override large_map default of true — block_depth=5 gives 1.6m cubes otherwise
+predict: false

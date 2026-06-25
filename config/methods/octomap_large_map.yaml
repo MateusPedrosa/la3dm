@@ -1,0 +1,20 @@
+# OctoMap config — large sonar map
+
+resolution: 0.1
+max_range: 20.0
+ds_resolution: 0.1
+
+# Bounds on map height
+min_z: -3.0
+max_z: 3.0
+
+# Occupancy probability thresholds
+occupied_thresh: 0.7
+
+# Bayesian update probabilities
+prob_hit:  0.7   # probability assigned to a cell when a ray hits it
+prob_miss: 0.4   # probability assigned to cells a ray passes through
+
+# Log-odds clamping (OctoMap defaults)
+clamping_thres_min: 0.1192
+clamping_thres_max: 0.971

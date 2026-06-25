@@ -19,7 +19,10 @@
 
     <arg name="method_config" value="$(find la3dm)/config/methods"/>
     <arg name="data_config" value="$(find la3dm)/config/datasets/"/>
-    
+
+    <!-- Static replay reads from disk, no live clock source — force wall time -->
+    <param name="/use_sim_time" value="false"/>
+
     <!--Start RVIZ-->
     <node name="rviz_map" pkg="rviz" type="rviz"
         args="-d $(find la3dm)/rviz/$(arg dataset).rviz"

@@ -45,7 +45,7 @@ void cloudCallback(const sensor_msgs::PointCloud2ConstPtr &msg) {
         return;
     }
 
-    pcl::PointCloud<pcl::PointXYZ> cloud;
+    pcl::PointCloud<pcl::PointXYZI> cloud;
     pcl::fromROSMsg(cloud_map_msg, cloud);
 
     if (cloud.empty()) {
