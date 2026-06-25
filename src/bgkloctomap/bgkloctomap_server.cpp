@@ -1,5 +1,6 @@
 #include <string>
 #include <iostream>
+#include <mutex>
 #include <unordered_set>
 #include <ros/ros.h>
 #include <pcl_ros/transforms.h>
@@ -7,6 +8,8 @@
 #include <geometry_msgs/PointStamped.h>
 #include "markerarray_pub.h"
 #include "bgkloctomap.h"
+
+std::mutex map_mutex;
 
 tf::TransformListener *listener;
 std::string frame_id("/odom");
@@ -92,6 +95,7 @@ void clickedPointHandler(const geometry_msgs::PointStamped::ConstPtr &msg) {
     debug_voxel_y = (float)msg->point.y;
     debug_voxel_z = (float)msg->point.z;
     debug_voxel_enable = true;
+    std::lock_guard<std::mutex> lock(map_mutex);
     map->set_debug_voxel(true, debug_voxel_x, debug_voxel_y, debug_voxel_z);
     ROS_INFO("[dbg_voxel] now tracing voxel near (%.3f, %.3f, %.3f)",
              debug_voxel_x, debug_voxel_y, debug_voxel_z);
@@ -99,11 +103,23 @@ void clickedPointHandler(const geometry_msgs::PointStamped::ConstPtr &msg) {
 
 void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
+    // ---- Outside mutex: TF and point-cloud transform are fast and read-only ----
     tf::StampedTransform transform;
     try {
+        // Wait for the TF at exactly the cloud's stamp. The sonar can run
+        // slightly ahead of the TF publisher (common with use_sim_time),
+        // so a short wait is needed before the exact-timestamp lookup.
+        // Safe to block here: TF lookup is outside map_mutex, so the viz
+        // timer and other callbacks are not stalled.
+        if (!listener->waitForTransform(frame_id, cloud->header.frame_id,
+                                        cloud->header.stamp, ros::Duration(1.0))) {
+            ROS_WARN_THROTTLE(1.0, "TF timeout for stamp %.3f, dropping cloud",
+                              cloud->header.stamp.toSec());
+            return;
+        }
         listener->lookupTransform(frame_id, cloud->header.frame_id, cloud->header.stamp, transform);
     } catch (tf::TransformException ex) {
-        ROS_WARN_THROTTLE(1.0, "Waiting for TF: %s", ex.what());
+        ROS_WARN_THROTTLE(1.0, "TF lookup failed: %s", ex.what());
         return;
     }
 
@@ -135,20 +151,26 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
     tf::Vector3 up = mat.getColumn(2);
     la3dm::point3f sensor_up(up.x(), up.y(), up.z());
 
-    ros::Time start = ros::Time::now();
-    map->insert_pointcloud(*pcl_cloud_world, origin, sensor_up,
-                           (float)ds_resolution, (float)free_resolution,
-                           (float)max_range,
-                           (float)orientation.x(), (float)orientation.y(),
-                           (float)orientation.z(), (float)orientation.w());
-    ros::Time end = ros::Time::now();
-    ROS_INFO_STREAM("Map update finished in " << (end - start).toSec() << "s");
+    // ---- Under mutex: map write + shared-state update ----
+    {
+        std::lock_guard<std::mutex> lock(map_mutex);
 
-    last_position  = translation;
-    last_orientation = orientation;
-    past_viewpoints.push_back(tf::Transform(orientation, translation));
+        ros::Time start = ros::Time::now();
+        map->insert_pointcloud(*pcl_cloud_world, origin, sensor_up,
+                               (float)ds_resolution, (float)free_resolution,
+                               (float)max_range,
+                               (float)orientation.x(), (float)orientation.y(),
+                               (float)orientation.z(), (float)orientation.w());
+        ros::Time end = ros::Time::now();
+        ROS_INFO_STREAM("Map update finished in " << (end - start).toSec() << "s");
 
-    // Publish viewpoints on change: append one pose to the cached message and republish
+        last_position  = translation;
+        last_orientation = orientation;
+        past_viewpoints.push_back(tf::Transform(orientation, translation));
+    }
+
+    // Publish viewpoints outside the mutex: viewpoints_msg is only touched by
+    // cloudHandler, and ROS publishers are thread-safe.
     {
         geometry_msgs::Pose pose;
         pose.position.x = translation.x();
@@ -174,6 +196,7 @@ void publishMapVisualization(const ros::TimerEvent&) {
 
     // ---- Map visualisation ----
     {
+        std::lock_guard<std::mutex> lock(map_mutex);
         ros::Time start2 = ros::Time::now();
 
         m_pub_occ->clear();
@@ -556,10 +579,12 @@ int main(int argc, char **argv) {
         ROS_WARN("viz_rate <= 0: map visualization disabled.");
     }
 
-    while(ros::ok())
-    {
-    	ros::spin();
-    }
+    // Two threads: one for sonar callbacks, one for the viz timer.
+    // The sonar callback does TF+PCL outside the mutex, so it can overlap
+    // with the viz loop for those fast steps even while viz holds map_mutex.
+    ros::AsyncSpinner spinner(2);
+    spinner.start();
+    ros::waitForShutdown();
 
     return 0;
 }
