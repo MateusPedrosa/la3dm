@@ -1,5 +1,5 @@
-#ifndef LA3DM_BGKL_H
-#define LA3DM_BGKL_H
+#ifndef LA3DM_BGKS_H
+#define LA3DM_BGKS_H
 
 namespace la3dm {
 
@@ -10,7 +10,7 @@ namespace la3dm {
      * @ref Nonparametric Bayesian inference on multivariate exponential families
      */
     template<int dim, typename T>
-    class BGKLInference {
+    class BGKSInference {
     public:
         /// Eigen matrix type for training and test data and kernel
         using MatrixXType = Eigen::Matrix<T, -1, 2*dim, Eigen::RowMajor>;
@@ -21,18 +21,32 @@ namespace la3dm {
 
         float EPSILON = 0.0001;
 
-        BGKLInference(T sf2, T ell) : sf2(sf2), ell(ell), trained(false) { }
+        BGKSInference(T sf2, T ell, T theta_bw = 0.6f * 3.14159f / 180.0f, T phi_bw = 20.0f * 3.14159f / 180.0f)
+            : sf2(sf2), ell(ell), theta_bw(theta_bw), phi_bw(phi_bw), trained(false) { }
 
         /*
          * @brief Fit BGK Model
          * @param x input vector (3N, row major)
          * @param y target vector (N)
          */
-        void train(const std::vector<T> &x, const std::vector<T> &y) {
+        /*
+         * @brief Fit BGK Model
+         * @param x input vector (3N, row major)
+         * @param y target vector (N)
+         * @param w weight vector (N)
+         */
+        void train(const std::vector<T> &x, const std::vector<T> &y, const std::vector<T> &w = std::vector<T>()) {
             assert(x.size() % (2*dim) == 0 && (int) (x.size() / (2*dim)) == y.size());
             MatrixXType _x = Eigen::Map<const MatrixXType>(x.data(), x.size() / (2*dim), 2*dim);
             MatrixYType _y = Eigen::Map<const MatrixYType>(y.data(), y.size(), 1);
-            train(_x, _y);
+            if (w.empty()) {
+                MatrixYType _w = MatrixYType::Ones(y.size(), 1);
+                train(_x, _y, _w);
+            } else {
+                assert(w.size() == y.size());
+                MatrixYType _w = Eigen::Map<const MatrixYType>(w.data(), w.size(), 1);
+                train(_x, _y, _w);
+            }
         }
 
         /*
@@ -40,20 +54,26 @@ namespace la3dm {
          * @param x input matrix (NX3)
          * @param y target matrix (NX1)
          */
-        void train(const MatrixXType &x, const MatrixYType &y) {
+        void train(const MatrixXType &x, const MatrixYType &y, const MatrixYType &w) {
             // std::cout << "training pt2" << std::endl;
             this->x = MatrixXType(x);
             this->y = MatrixYType(y);
+            this->weights = MatrixYType(w);
             trained = true;
+        }
+
+        void train(const MatrixXType &x, const MatrixYType &y) {
+            train(x, y, MatrixYType::Ones(y.rows(), 1));
         }
 
         /*
          * @brief Predict with BGK Model
+         * @param origin sensor origin in the scan
          * @param xs input vector (3M, row major)
          * @param ybar positive class kernel density estimate (\bar{y})
          * @param kbar kernel density estimate (\bar{k})
          */
-        void predict(const std::vector<T> &xs, std::vector<T> &ybar, std::vector<T> &kbar) const {
+        void predict(const point3f &origin, const point3f &sensor_up, const std::vector<T> &xs, std::vector<T> &ybar, std::vector<T> &kbar) const {
             // std::cout << "predicting" << std::endl;
             assert(xs.size() % dim == 0);
             // std::cout << "passed assertion" << std::endl;
@@ -61,7 +81,7 @@ namespace la3dm {
             // std::cout << "matrix conversion successful" << std::endl;
 
             MatrixYType _ybar, _kbar;
-            predict(_xs, _ybar, _kbar);
+            predict(origin, sensor_up, _xs, _ybar, _kbar);
             // std::cout << "finished prediction" << std::endl;
             ybar.resize(_ybar.rows());
             kbar.resize(_kbar.rows());
@@ -73,18 +93,19 @@ namespace la3dm {
 
         /*
          * @brief Predict with nonparametric Bayesian generalized kernel inference
+         * @param origin sensor origin in the scan
          * @param xs input vector (M x 3)
          * @param ybar positive class kernel density estimate (M x 1)
          * @param kbar kernel density estimate (M x 1)
          */
-        void predict(const MatrixPType &xs, MatrixYType &ybar, MatrixYType &kbar) const {
+        void predict(const point3f &origin, const point3f &sensor_up, const MatrixPType &xs, MatrixYType &ybar, MatrixYType &kbar) const {
             // std::cout << "second prediction step" << std::endl;
             assert(trained == true);
 	        MatrixKType Ks;
-        	covSparseLine(xs, x, Ks);
+        	covSonarBeam(origin, sensor_up, xs, x, Ks);
             // std::cout << "computed covsparseline" << std::endl;
-        	ybar = (Ks * y).array();
-        	kbar = Ks.rowwise().sum().array();
+        	ybar = (Ks * y.cwiseProduct(weights)).array();
+        	kbar = (Ks * weights).array();
         }
 
     private:
@@ -174,38 +195,114 @@ namespace la3dm {
         }
 
         /*
-         * @brief Sparse kernel.
-         * @param x input vector
-         * @param z input vector
+         * @brief Sonar Beam specific sparse kernel with angular geometry.
+         * @param origin sensor origin in the scan
+         * @param sensor_up up vector of the sensor
+         * @param x input vector (query points)
+         * @param z input vector (measurement lines)
          * @return Kxz covariance matrix
-         * @ref A sparse covariance function for exact gaussian process inference in large datasets.
          */
-        void covSparseLine(const MatrixPType &x, const MatrixXType &z, MatrixKType &Kxz) const {
-            point_to_line_dist(x, z, Kxz); // Check on this
-            Kxz /= ell;
-            Kxz = (((2.0f + (Kxz * 2.0f * 3.1415926f).array().cos()) * (1.0f - Kxz.array()) / 3.0f) +
-                  (Kxz * 2.0f * 3.1415926f).array().sin() / (2.0f * 3.1415926f)).matrix() * sf2;
+        void covSonarBeam(const point3f &origin, const point3f &sensor_up, const MatrixPType &x, const MatrixXType &z, MatrixKType &Kxz) const {
+            Kxz = MatrixKType::Zero(x.rows(), z.rows());
+            float sigma_theta = theta_bw / 4.0f; // TODO: tune
+            float sigma_phi = phi_bw / 4.0f; // TODO: tune
+            point3f p, z0, z1, v, axis, u, right, up;
+            float r_test, r_hit, d_range, v_x, v_y, v_z, theta, phi, w_angular;
+            
+            for (int i = 0; i < x.rows(); ++i) {
+                p = point3f(x(i,0), x(i,1), x(i,2));
+                v = p - origin;
+                r_test = v.norm();
+                
+                for (int j = 0; j < z.rows(); ++j) {
+                    z0 = point3f(z(j,0), z(j,1), z(j,2));
+                    z1 = point3f(z(j,3), z(j,4), z(j,5));
+                    
+                    bool is_occupied = (z1 - z0).norm() < EPSILON;
+                    
+                    if (is_occupied) {
+                        axis = z0 - origin;
+                        r_hit = axis.norm();
+                        d_range = std::abs(r_test - r_hit);
+                    } else {
+                        // For free rays passing from origin to z1
+                        axis = z1 - origin;
+                        r_hit = axis.norm();
+                        if (r_test <= r_hit) {
+                            d_range = 0.0f;
+                        } else {
+                            d_range = ell + 1.0f; // Force it outside the kernel length so k_radial becomes 0
+                        }
+                    }
+                    
+                    if (r_hit > EPSILON) {
+                        u = axis.normalized();
+                        
+                        // Orthonormal basis
+                        point3f ref = (std::abs(sensor_up.dot(u)) < 0.9f) ? sensor_up : point3f(1,0,0);
+                        right = (ref.cross(u)).normalized();
+                        up    = (u.cross(right)).normalized();
 
-            // Clean up for values with distance outside length scale
-            // Possible because Kxz <= 0 when dist >= ell
-            for (int i = 0; i < Kxz.rows(); ++i)
-            {
-                for (int j = 0; j < Kxz.cols(); ++j)
-                    if (Kxz(i,j) < 0.0)
-                        Kxz(i,j) = 0.0f;
+                        v_x = v.dot(u);
+                        v_y = v.dot(right);
+                        v_z = v.dot(up);
+                        
+                        // Mask behind sensor
+                        if (v_x < 0.0f) {
+                            Kxz(i, j) = 0.0f;
+                            continue;
+                        }
+
+                        if (r_test > EPSILON) {
+                            phi = std::asin(v_z / r_test);
+                            theta = std::atan2(v_y, v_x);
+                        } else {
+                            phi = 0.0f;
+                            theta = 0.0f;
+                        }
+
+                        // TODO: consider masking out points outside beamwidth properly instead of just setting kernel to 0, since it may cause discontinuities in the kernel function that could affect inference
+                        if (std::abs(theta) > theta_bw / 2.0f || std::abs(phi) > phi_bw / 2.0f) {
+                            Kxz(i, j) = 0.0f; 
+                            continue;
+                        }
+                        
+                        if (is_occupied) {
+                            w_angular = std::exp(-0.5f * ((theta / sigma_theta) * (theta / sigma_theta) + (phi / sigma_phi) * (phi / sigma_phi)));
+                        } else {
+                                w_angular = 1.0f;
+                        }
+                    } else {
+                        continue; // degenerate measurement, skip
+                    }
+                    
+                    // Radial Kernel
+                    float d_scaled = d_range / ell;
+                    float k_radial = 0.0f;
+                    if (d_scaled < 1.0f) {
+                        k_radial = (((2.0f + std::cos(d_scaled * 2.0f * 3.1415926f)) * (1.0f - d_scaled) / 3.0f) +
+                                    std::sin(d_scaled * 2.0f * 3.1415926f) / (2.0f * 3.1415926f)) * sf2;
+                        if (k_radial < 0.0f) k_radial = 0.0f;
+                    }
+                    
+                    Kxz(i, j) = k_radial * w_angular;
+                }
             }
         }
 
         T sf2;    // signal variance
         T ell;    // length-scale
+        T theta_bw; // vertical beamwidth
+        T phi_bw;   // horizontal beamwidth
 
         MatrixXType x;   // temporary storage of training data
         MatrixYType y;   // temporary storage of training labels
+        MatrixYType weights; // temporary storage of training sample weights
 
         bool trained;    // true if bgkinference stored training data
     };
 
-    typedef BGKLInference<3, float> BGKL3f;
+    typedef BGKSInference<3, float> BGKS3f;
 
 }
-#endif // LA3DM_BGKL_H
+#endif // LA3DM_BGKS_H

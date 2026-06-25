@@ -107,6 +107,7 @@ catkin_package(
   INCLUDE_DIRS include
                include/common
                include/bgkloctomap
+               include/bgksoctomap
                include/bgklvoctomap
                include/bgkoctomap
                include/gpoctomap
@@ -126,6 +127,7 @@ include_directories(
         include/gpoctomap
         include/bgkoctomap
         include/bgkloctomap
+        include/bgksoctomap
 	include/bgklvoctomap
         include/common
         ${catkin_INCLUDE_DIRS}
@@ -150,12 +152,20 @@ set(BGKLV_SOURCE_FILES
   src/bgklvoctomap/bgklvoctree.cpp
 )
 
-# Files for BGKL source
+# Files for BGKL source (original BGKLOctoMap from upstream)
 set(BGKL_SOURCE_FILES
   src/bgkloctomap/bgklblock.cpp
   src/bgkloctomap/bgkloctomap.cpp
   src/bgkloctomap/bgkloctree_node.cpp
   src/bgkloctomap/bgkloctree.cpp
+)
+
+# Files for BGKS source (BGKOctoMap-S — sonar-adapted fork)
+set(BGKS_SOURCE_FILES
+  src/bgksoctomap/bgksblock.cpp
+  src/bgksoctomap/bgksoctomap.cpp
+  src/bgksoctomap/bgksoctree_node.cpp
+  src/bgksoctomap/bgksoctree.cpp
 )
 
 # Files for BGK source
@@ -176,7 +186,7 @@ set(GP_SOURCE_FILES
 
 add_library(la3dm
   ${COMMON_SOURCE_FILES}
-  ${BGKL_SOURCE_FILES}
+  ${BGKS_SOURCE_FILES}
 )
 target_link_libraries(la3dm
   ${catkin_LIBRARIES}
@@ -192,6 +202,12 @@ add_executable(bgkloctomap_static_node
     ${BGKL_SOURCE_FILES}
     ${COMMON_SOURCE_FILES}
     src/bgkloctomap/bgkloctomap_static_node.cpp
+)
+
+add_executable(bgksoctomap_static_node
+    ${BGKS_SOURCE_FILES}
+    ${COMMON_SOURCE_FILES}
+    src/bgksoctomap/bgksoctomap_static_node.cpp
 )
 
 add_executable(bgkoctomap_static_node
@@ -216,6 +232,12 @@ add_executable(bgkloctomap_server
     ${BGKL_SOURCE_FILES}
     ${COMMON_SOURCE_FILES}
     src/bgkloctomap/bgkloctomap_server.cpp
+)
+
+add_executable(bgksoctomap_server
+    ${BGKS_SOURCE_FILES}
+    ${COMMON_SOURCE_FILES}
+    src/bgksoctomap/bgksoctomap_server.cpp
 )
 
 add_executable(bgkoctomap_server
@@ -252,6 +274,10 @@ target_link_libraries(bgkloctomap_static_node
         ${catkin_LIBRARIES}
 )
 
+target_link_libraries(bgksoctomap_static_node
+        ${catkin_LIBRARIES}
+)
+
 target_link_libraries(bgkoctomap_static_node
         ${catkin_LIBRARIES}
 )
@@ -265,6 +291,10 @@ target_link_libraries(bgklvoctomap_server
 )
 
 target_link_libraries(bgkloctomap_server
+        ${catkin_LIBRARIES}
+)
+
+target_link_libraries(bgksoctomap_server
         ${catkin_LIBRARIES}
 )
 

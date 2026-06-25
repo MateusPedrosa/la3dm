@@ -1,0 +1,94 @@
+# BGKL Large Map config
+
+frame_id: map
+
+# Map topic, grid cell mininum resolution
+topic: /occupied_cells_vis_array
+resolution: 0.1
+block_depth: 5 # Test-data octree depth (see Wang & Englot ICRA 2016)
+max_range: 20 # Sensor max range (m)
+max_vis_radius: 0 # Visualization sphere radius around the robot (m); 0 = unlimited
+original_size: true
+
+# Bounds on map height
+min_z: -3.0
+max_z: 3.0
+
+# Kernel parameters
+sf2: 1.0
+ell: 0.3
+
+# Sampling resolutions
+free_resolution: 0.1 #6.5 for block depth 5, 3.25 for block depth 4, 13 for depth 6
+ds_resolution: 0.1  # Downsampling factor
+swath_angle: 120.0  # Total multibeam swath width (degrees); -1 = disabled (azimuth culling off)
+
+# Free/Occupied Thresholds
+free_thresh: 0.3
+occupied_thresh: 0.7
+
+# BGKL parameters
+prior_A: 0.001 # Positive class (occupied)
+prior_B: 0.001 # Negative class (unoccupied)
+var_thresh: 100.0 # Threshold on variance to distinguish known/unknown
+free_ray_range_weight: false # If true, apply range weight to free-ray kernel evidence
+# Directional kernel bandwidths (radians). Must be explicit here so static and server
+# nodes use identical values — both fall back to their own hardcoded defaults otherwise.
+theta_bw: 0.010472  # 0.6 degrees — sonar vertical beam half-width
+phi_bw:   0.349066  # 20 degrees  — sonar horizontal swath half-width
+
+# Per-voxel directional evidence weighting (information matrix)
+# tau_info: W_sat — saturation constant for the novelty weight w_voxel = max(0, 1 - n^T I n / tau_info).
+#   Controls how much directional evidence accumulates before a direction is considered saturated.
+#   Also the threshold for the deallocation criterion (lambda2 >= (1-delta)*tau_info).
+#   Tuning rule: tau_info ≈ N * w_r_ref / 2.3, where N is the number of same-direction
+#   observations you want before that direction saturates, and w_r_ref is the range weight
+#   at your typical observation range (w_r = 1/(r^2+1), min-clamped at 0.05).
+#   Example: N=20 observations at r=5m → w_r=1/26≈0.038 (clamped to 0.05) → tau_info ≈ 20*0.05/2.3 ≈ 0.43
+tau_info: 0.5
+
+# tau_var: Beta variance threshold for the deallocation criterion.
+#   A voxel's info matrix is only marked as constrained (and stops tracking direction)
+#   when BOTH: variance < tau_var AND lambda2(I_2D) >= (1-delta)*tau_info.
+#   Keep this low (0.001–0.05) so only well-classified voxels stop accumulating direction info.
+tau_var: 0.01
+
+# delta: tolerance for the deallocation threshold.
+#   Because lambda2 approaches tau_info asymptotically, the exact threshold is never reached.
+#   A voxel is declared directionally constrained when lambda2 >= (1-delta)*tau_info.
+#   Smaller delta = stricter (more observations needed); larger delta = looser.
+delta: 0.05
+
+# Visualization scaling parameters
+max_var_vis:   0.25   # Variance at which color saturates to red (prior ≈ 0.249, so 0.25 = full range)
+var_vis_gamma: 2.0    # Power applied to t=var/max_var_vis before color mapping.
+                      # 1.0 = linear; >1 stretches red→yellow (yellow appears at higher variance);
+                      # try 2.0–3.0 if everything looks red
+
+# Coarse occupied-voxel visualization for path-planner safety margin
+# Publishes to /occupied_cells_coarse_vis_array with voxel side = resolution * 2^N
+coarse_depth_steps: 1
+
+# Pose-level novelty weighting
+# When true, replaces per-voxel w_novelty in the Beta update with a per-frame w_pose
+# computed from distance between current sonar pose and a history of K prior poses.
+# The per-voxel w_novelty is still computed for the info matrix and NBV planner.
+use_pose_level_weighting: false   # false = per-voxel mode (backward compat default)
+pose_history_size: 20             # K: rolling history length
+pose_novelty_sigma: 0.3           # Gaussian bandwidth in SE(3) distance space
+pose_w_roll:       1.0            # Weight for roll component of SO(3) distance
+pose_w_pitch:      0.6            # Weight for pitch
+pose_w_yaw:        0.05           # Weight for yaw (low: sonar often spins)
+pose_w_vx_per_l2:  0.2            # Weight for longitudinal displacement / l²
+pose_w_vy_per_l2:  0.05           # Weight for lateral displacement / l²
+pose_w_vz_per_l2:  0.5            # Weight for vertical displacement / l²
+
+# Ablation flags (for experiments — disable in production)
+ablate_directional_weights: false  # true: skip w_range, w_voxel, and info-matrix update; raw Beta accumulation
+
+# Per-voxel debug tracing — prints update internals for the voxel nearest (x,y,z) each scan
+# Look for [dbg_voxel] lines in rosout. Disable in production.
+debug_voxel_enable: false
+debug_voxel_x: 0.0
+debug_voxel_y: 0.0
+debug_voxel_z: 0.0

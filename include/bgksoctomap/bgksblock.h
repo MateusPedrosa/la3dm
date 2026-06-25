@@ -1,11 +1,11 @@
-#ifndef LA3DM_BGKL_BLOCK_H
-#define LA3DM_BGKL_BLOCK_H
+#ifndef LA3DM_BGKS_BLOCK_H
+#define LA3DM_BGKS_BLOCK_H
 
 #include <unordered_map>
 #include <array>
 #include "point3f.h"
-#include "bgkloctree_node.h"
-#include "bgkloctree.h"
+#include "bgksoctree_node.h"
+#include "bgksoctree.h"
 
 namespace la3dm {
 
@@ -22,7 +22,7 @@ namespace la3dm {
 #ifdef PREDICT
     typedef std::array<BlockHashKey, 27> ExtendedBlock;
 #else
-    typedef std::array<BlockHashKey, 7> ExtendedBlock;
+    typedef std::array<BlockHashKey, 27> ExtendedBlock;
 #endif
 
     /// Convert from block to hash key.
@@ -53,7 +53,7 @@ namespace la3dm {
 
         friend ExtendedBlock get_extended_block(BlockHashKey key);
 
-        friend class BGKLOctoMap;
+        friend class BGKSOctoMap;
 
     public:
         Block();
@@ -106,4 +106,4 @@ namespace la3dm {
     };
 }
 
-#endif // LA3DM_BGKL_BLOCK_H
+#endif // LA3DM_BGKS_BLOCK_H

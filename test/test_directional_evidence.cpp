@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 #include <cmath>
-#include "bgkloctree_node.h"
+#include "bgksoctree_node.h"
 
 // Helper: compute n^T I(p) n from an Occupancy's raw info.
 static float quad_form(const la3dm::Occupancy& node, const la3dm::point3f& n)

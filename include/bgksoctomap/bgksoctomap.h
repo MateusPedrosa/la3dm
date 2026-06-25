@@ -1,30 +1,62 @@
-#ifndef LA3DM_BGKL_OCTOMAP_H
-#define LA3DM_BGKL_OCTOMAP_H
+#ifndef LA3DM_BGKS_OCTOMAP_H
+#define LA3DM_BGKS_OCTOMAP_H
 
 #include <unordered_map>
 #include <vector>
+#include <deque>
 #include <pcl/point_cloud.h>
 #include <pcl/point_types.h>
 #include "rtree.h"
-#include "bgklblock.h"
-#include "bgkloctree_node.h"
+#include "bgksblock.h"
+#include "bgksoctree_node.h"
 #include "point6f.h"
 
 namespace la3dm {
 
+    /// Single pose history entry: world-frame position + unit quaternion.
+    struct PoseEntry {
+        float px, py, pz;
+        float qx, qy, qz, qw;
+    };
+
     /// PCL PointCloud types as input
-    typedef pcl::PointXYZ PCLPointType;
+    typedef pcl::PointXYZI PCLPointType;
     typedef pcl::PointCloud<PCLPointType> PCLPointCloud;
 
     /*
-     * @brief BGKLOctoMap
+     * @brief BGKSOctoMap
      *
      * Bayesian Generalized Kernel Inference for Occupancy Map Prediction
      * The space is partitioned by Blocks in which OcTrees with fixed
      * depth are rooted. Occupancy values in one Block is predicted by 
      * its ExtendedBlock via Bayesian generalized kernel inference.
      */
-    class BGKLOctoMap {
+    // Forward declaration so BGKSPreparedUpdate can hold BGKS3f* without
+    // pulling in bgksinference.h (and its Eigen dependency) into this header.
+    template<int dim, typename T> class BGKSInference;
+    typedef BGKSInference<3, float> BGKS3f;
+
+    /// Intermediate result of the lock-free prepare phase of a map update.
+    /// Owns the heap-allocated BGKS3f kernel objects; destructor is defined in
+    /// bgksoctomap.cpp where BGKSInference is complete.
+    struct BGKSPreparedUpdate {
+        std::vector<BlockHashKey>                  test_blocks;
+        std::unordered_map<BlockHashKey, BGKS3f*>  bgks_arr;
+        point3f                                     origin;
+        point3f                                     sensor_up;
+        bool                                        empty = true;
+        float                                       w_pose = 1.0f;
+
+        BGKSPreparedUpdate() = default;
+        BGKSPreparedUpdate(BGKSPreparedUpdate&&) = default;
+        BGKSPreparedUpdate& operator=(BGKSPreparedUpdate&&) = default;
+        BGKSPreparedUpdate(const BGKSPreparedUpdate&) = delete;
+        BGKSPreparedUpdate& operator=(const BGKSPreparedUpdate&) = delete;
+
+        ~BGKSPreparedUpdate();  // defined in bgksoctomap.cpp
+    };
+
+    class BGKSOctoMap {
     public:
         /// Types used internally
         typedef std::vector<point3f> PointCloud;
@@ -35,7 +67,7 @@ namespace la3dm {
         typedef RTree<int, float, 3, float> MyRTree;
 
     public:
-        BGKLOctoMap();
+        BGKSOctoMap();
 
         /*
          * @param resolution (default 0.1m)
@@ -50,7 +82,7 @@ namespace la3dm {
          * @param free_thresh free threshold for Occupancy probability (default 0.3)
          * @param occupied_thresh occupied threshold for Occupancy probability (default 0.7)
          */
-        BGKLOctoMap(float resolution,
+        BGKSOctoMap(float resolution,
                 unsigned short block_depth,
                 float sf2,
                 float ell,
@@ -58,9 +90,12 @@ namespace la3dm {
                 float occupied_thresh,
                 float var_thresh,
                 float prior_A,
-                float prior_B);
+                float prior_B,
+                float theta_bw = 0.6f * 3.14159f / 180.0f,
+                float phi_bw = 20.0f * 3.14159f / 180.0f,
+                bool free_ray_range_weight = false);
 
-        ~BGKLOctoMap();
+        ~BGKSOctoMap();
 
         /// Set resolution.
         void set_resolution(float resolution);
@@ -75,16 +110,71 @@ namespace la3dm {
         inline float get_block_depth() const { return block_depth; }
 
         /*
-         * @brief Insert PCL PointCloud into BGKLOctoMaps.
+         * @brief Insert PCL PointCloud into BGKSOctoMaps.
          * @param cloud one scan in PCLPointCloud format
          * @param origin sensor origin in the scan
+         * @param sensor_up up vector of the sensor
          * @param ds_resolution downsampling resolution for PCL VoxelGrid filtering (-1 if no downsampling)
          * @param free_res resolution for sampling free training points along sensor beams (default 2.0)
          * @param max_range maximum range for beams to be considered as valid measurements (-1 if no limitation)
          */
-        void insert_pointcloud(const PCLPointCloud &cloud, const point3f &origin, float ds_resolution,
+        void insert_pointcloud(const PCLPointCloud &cloud, const point3f &origin,
+                               const point3f &sensor_up,
+                               float ds_resolution,
                                float free_res = 2.0f,
-                               float max_range = -1);
+                               float max_range = -1,
+                               float qx = 0.f, float qy = 0.f, float qz = 0.f, float qw = 1.f);
+
+        /// Lock-free phase: downsampling, ray tracing, BGKS kernel training.
+        /// Does NOT access block_arr — safe to call without holding ot_mutex_.
+        BGKSPreparedUpdate prepare_pointcloud_update(const PCLPointCloud &cloud,
+                                                     const point3f &origin,
+                                                     const point3f &sensor_up,
+                                                     float ds_resolution,
+                                                     float free_res,
+                                                     float max_range,
+                                                     float qx = 0.f, float qy = 0.f,
+                                                     float qz = 0.f, float qw = 1.f);
+
+        /// Voxel-level change record produced by commit_pointcloud_update().
+        /// Callers accumulate these into a dirty buffer so that computePriorityCache()
+        /// can update the candidate index incrementally instead of re-scanning all leaves.
+        struct DirtyEntry {
+            point3f      pos;        // world-frame voxel centre
+            float        priority;   // node.get_var() after update
+            float        info[6];    // raw symmetric info matrix [Ixx,Ixy,Ixz,Iyy,Iyz,Izz]
+            bool         active;     // has_active_info_matrix() && priority > 1e-8f
+            la3dm::State state;      // OCCUPIED / FREE / UNKNOWN
+        };
+
+        /// Write phase: prediction loop + node.update(). Must be called under unique_lock(ot_mutex_).
+        /// If dirty_out is non-null, a DirtyEntry is appended for every voxel whose info
+        /// matrix was updated, allowing callers to maintain an incremental candidate index.
+        void commit_pointcloud_update(const BGKSPreparedUpdate &upd,
+                                      std::vector<DirtyEntry>* dirty_out = nullptr);
+
+        /// Configure pose-level novelty weighting. Call once after construction.
+        /// When enabled, the per-frame w_pose replaces the per-voxel w_novelty in the
+        /// Beta update path. The info matrix update is unchanged.
+        void configure_pose_level_weighting(bool enabled, int K, float sigma,
+                                            float w_roll, float w_pitch, float w_yaw,
+                                            float w_vx_l2, float w_vy_l2, float w_vz_l2);
+
+        /// Ablation: disable w_range, w_voxel, and the info-matrix update.
+        /// When true, Beta accumulates raw (unweighted) counts only.
+        void set_ablate_directional_weights(bool v) { ablate_directional_weights_ = v; }
+
+        /// Debug: log every update to the voxel nearest (x,y,z) each scan.
+        void set_debug_voxel(bool enabled, float x, float y, float z) {
+            debug_voxel_enabled_ = enabled;
+            debug_voxel_x_ = x; debug_voxel_y_ = y; debug_voxel_z_ = z;
+        }
+
+        /// Configure frustum-based block culling. Call once after construction.
+        /// @param swath_angle_deg  Total multibeam swath width in degrees
+        ///                         (e.g. 120 degrees). Pass <= 0 to disable azimuth
+        ///                         culling (elevation culling via phi_bw is always on).
+        void configure_frustum(float swath_angle_deg);
 
         void insert_training_data(const GPLineCloud &cloud);
 
@@ -93,7 +183,7 @@ namespace la3dm {
 
         class RayCaster {
         public:
-            RayCaster(const BGKLOctoMap *map, const point3f &start, const point3f &end) : map(map) {
+            RayCaster(const BGKSOctoMap *map, const point3f &start, const point3f &end) : map(map) {
                 assert(map != nullptr);
 
                 _block_key = block_to_hash_key(start);
@@ -205,7 +295,7 @@ namespace la3dm {
             }
 
         private:
-            const BGKLOctoMap *map;
+            const BGKSOctoMap *map;
             Block *block;
             point3f block_lim;
             float block_size, resolution;
@@ -219,7 +309,7 @@ namespace la3dm {
         /// LeafIterator for iterating all leaf nodes in blocks
         class LeafIterator : public std::iterator<std::forward_iterator_tag, OcTreeNode> {
         public:
-            LeafIterator(const BGKLOctoMap *map) {
+            LeafIterator(const BGKSOctoMap *map) {
                 assert(map != nullptr);
 
                 block_it = map->block_arr.cbegin();
@@ -230,6 +320,57 @@ namespace la3dm {
                     end_leaf = block_it->second->end_leaf();
                 } else {
                     leaf_it = OcTree::LeafIterator();
+                    end_leaf = OcTree::LeafIterator();
+                }
+            }
+
+            // Spatial-filter constructor: only walks leaves of blocks whose
+            // center is within `radius + block_half_diagonal` of `center`.
+            // Uses grid enumeration (O(r³/block_size³)) instead of a linear
+            // scan of all blocks (O(N_total_blocks)) — stays fast as the map grows.
+            LeafIterator(const BGKSOctoMap *map, const point3f &center, float radius)
+                    : filter_active(true), filter_center(center) {
+                assert(map != nullptr);
+                float bs      = map->block_size;
+                float padded  = radius + 0.866025404f * bs;
+                block_threshold_sq = padded * padded;
+                end_block = map->block_arr.cend();
+
+                // Enumerate all block grid cells whose center is within the
+                // padded sphere and perform direct hash-table lookups.
+                int ix_min = (int)std::floor((center.x() - padded) / bs + 0.5f);
+                int ix_max = (int)std::floor((center.x() + padded) / bs + 0.5f);
+                int iy_min = (int)std::floor((center.y() - padded) / bs + 0.5f);
+                int iy_max = (int)std::floor((center.y() + padded) / bs + 0.5f);
+                int iz_min = (int)std::floor((center.z() - padded) / bs + 0.5f);
+                int iz_max = (int)std::floor((center.z() + padded) / bs + 0.5f);
+
+                for (int ix = ix_min; ix <= ix_max; ++ix) {
+                    float bx = ix * bs;
+                    float dx = bx - center.x();
+                    for (int iy = iy_min; iy <= iy_max; ++iy) {
+                        float by = iy * bs;
+                        float dy = by - center.y();
+                        for (int iz = iz_min; iz <= iz_max; ++iz) {
+                            float bz = iz * bs;
+                            float dz = bz - center.z();
+                            if (dx*dx + dy*dy + dz*dz > block_threshold_sq) continue;
+                            BlockHashKey key = block_to_hash_key(bx, by, bz);
+                            auto it = map->block_arr.find(key);
+                            if (it == map->block_arr.end()) continue;
+                            sphere_block_iters_.push_back(it);
+                        }
+                    }
+                }
+
+                sphere_idx_ = 0;
+                if (!sphere_block_iters_.empty()) {
+                    block_it = sphere_block_iters_[0];
+                    leaf_it  = block_it->second->begin_leaf();
+                    end_leaf = block_it->second->end_leaf();
+                } else {
+                    block_it = end_block;
+                    leaf_it  = OcTree::LeafIterator();
                     end_leaf = OcTree::LeafIterator();
                 }
             }
@@ -256,10 +397,23 @@ namespace la3dm {
             LeafIterator &operator++() {
                 ++leaf_it;
                 if (leaf_it == end_leaf) {
-                    ++block_it;
-                    if (block_it != end_block) {
-                        leaf_it = block_it->second->begin_leaf();
-                        end_leaf = block_it->second->end_leaf();
+                    if (filter_active) {
+                        ++sphere_idx_;
+                        if (sphere_idx_ < sphere_block_iters_.size()) {
+                            block_it = sphere_block_iters_[sphere_idx_];
+                            leaf_it  = block_it->second->begin_leaf();
+                            end_leaf = block_it->second->end_leaf();
+                        } else {
+                            block_it = end_block;
+                            leaf_it  = OcTree::LeafIterator();
+                            end_leaf = OcTree::LeafIterator();
+                        }
+                    } else {
+                        ++block_it;
+                        if (block_it != end_block) {
+                            leaf_it = block_it->second->begin_leaf();
+                            end_leaf = block_it->second->end_leaf();
+                        }
                     }
                 }
                 return *this;
@@ -307,10 +461,30 @@ namespace la3dm {
 
             OcTree::LeafIterator leaf_it;
             OcTree::LeafIterator end_leaf;
+
+            // Optional spatial filter (active only when constructed with a
+            // center+radius). Default-initialised so the other constructors
+            // leave filtering disabled.
+            bool filter_active = false;
+            point3f filter_center;
+            float block_threshold_sq = 0.0f;
+
+            // Pre-built list of matching blocks for the sphere constructor.
+            // Avoids the O(N_total_blocks) linear scan of advance_past_filtered_blocks.
+            std::vector<std::unordered_map<BlockHashKey, Block *>::const_iterator> sphere_block_iters_;
+            std::size_t sphere_idx_ = 0;
         };
 
         /// @return the beginning of leaf iterator
         inline LeafIterator begin_leaf() const { return LeafIterator(this); }
+
+        /// @return a leaf iterator restricted to blocks whose center is within
+        ///         `radius + block_half_diagonal` of `center`. Use with the
+        ///         unchanged `end_leaf()` sentinel. Falls back to full walk if
+        ///         you pass a radius large enough to enclose the map.
+        inline LeafIterator begin_leaf_in_sphere(const point3f &center, float radius) const {
+            return LeafIterator(this, center, radius);
+        }
 
         /// @return the end of leaf iterator
         inline LeafIterator end_leaf() const { return LeafIterator(block_arr.cend(), OcTree::LeafIterator()); }
@@ -334,9 +508,12 @@ namespace la3dm {
         /// Get the bounding box of a pointcloud.
         void bbox(const GPLineCloud &cloud, point3f &lim_min, point3f &lim_max) const;
 
-        /// Get all block indices inside a bounding box.
+        /// Get all block indices inside a bounding box, with optional frustum culling.
         void get_blocks_in_bbox(const point3f &lim_min, const point3f &lim_max,
-                                std::vector<BlockHashKey> &blocks) const;
+                                std::vector<BlockHashKey> &blocks,
+                                const point3f &origin,
+                                const point3f &sensor_up,
+                                const point3f &forward_hat) const;
 
         /// Get all points inside a bounding box assuming pointcloud has been inserted in rtree before.
         int get_gp_points_in_bbox(const point3f &lim_min, const point3f &lim_max,
@@ -377,10 +554,40 @@ namespace la3dm {
         float resolution;
         float block_size;
         unsigned short block_depth;
+        float theta_bw;
+        float phi_bw;
+        bool free_ray_range_weight;
         std::unordered_map<BlockHashKey, Block *> block_arr;
         MyRTree rtree;
+
+        // ---- Pose-level novelty weighting ----
+        bool pose_level_weighting_ = false;
+        std::deque<PoseEntry> pose_history_;
+        int   pose_history_K_     = 20;
+        float pose_novelty_sigma_ = 0.3f;
+        // W diagonal: [w_roll, w_pitch, w_yaw, w_vx/l², w_vy/l², w_vz/l²]
+        float pose_w_[6] = {1.0f, 0.6f, 0.05f, 0.2f, 0.05f, 0.5f};
+
+        // ---- Ablation ----
+        bool ablate_directional_weights_ = false;
+
+        // ---- Per-voxel debug tracing ----
+        bool  debug_voxel_enabled_ = false;
+        float debug_voxel_x_       = 0.0f;
+        float debug_voxel_y_       = 0.0f;
+        float debug_voxel_z_       = 0.0f;
+
+        // ---- Frustum culling ----
+        // swath_half_angle_ is half the total multibeam swath angle in radians.
+        // Defaults to M_PI (no azimuth culling). Elevation culling uses phi_bw always.
+        float swath_half_angle_ = (float)M_PI;
+
+        float compute_w_pose_(float px, float py, float pz,
+                              float qx, float qy, float qz, float qw) const;
+        void  update_pose_history_(float px, float py, float pz,
+                                   float qx, float qy, float qz, float qw);
     };
 
 }
 
-#endif // LA3DM_BGKLOCTOMAP_H
+#endif // LA3DM_BGKSOCTOMAP_H

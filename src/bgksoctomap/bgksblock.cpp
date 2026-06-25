@@ -1,8 +1,23 @@
-#include "bgklblock.h"
+#include "bgksblock.h"
 #include <queue>
 #include <algorithm>
 
 namespace la3dm {
+
+    static const std::array<int64_t, 27> EXTENDED_OFFSETS = []() {
+        std::array<int64_t, 27> offsets;
+        int idx = 0;
+        for (int dx = -1; dx <= 1; ++dx) {
+            for (int dy = -1; dy <= 1; ++dy) {
+                for (int dz = -1; dz <= 1; ++dz) {
+                    offsets[idx++] = (int64_t)dx * 1099511627776LL +
+                                     (int64_t)dy * 1048576LL +
+                                     (int64_t)dz;
+                }
+            }
+        }
+        return offsets;
+    }();
 
     std::unordered_map<OcTreeHashKey, point3f> init_key_loc_map(float resolution, unsigned short max_depth) {
         std::unordered_map<OcTreeHashKey, point3f> key_loc_map;
@@ -84,18 +99,8 @@ namespace la3dm {
 
     ExtendedBlock get_extended_block(BlockHashKey key) {
         ExtendedBlock blocks;
-        point3f center = hash_key_to_block(key);
-        float x = center.x();
-        float y = center.y();
-        float z = center.z();
-        blocks[0] = key;
-
-        float ex, ey, ez;
-        for (int i = 0; i < 6; ++i) {
-            ex = (i / 2 == 0) ? (i % 2 == 0 ? Block::size : -Block::size) : 0;
-            ey = (i / 2 == 1) ? (i % 2 == 0 ? Block::size : -Block::size) : 0;
-            ez = (i / 2 == 2) ? (i % 2 == 0 ? Block::size : -Block::size) : 0;
-            blocks[i + 1] = block_to_hash_key(ex + x, ey + y, ez + z);
+        for (int i = 0; i < 27; ++i) {
+            blocks[i] = key + EXTENDED_OFFSETS[i];
         }
         return blocks;
     }
@@ -113,19 +118,10 @@ namespace la3dm {
 
     ExtendedBlock Block::get_extended_block() const {
         ExtendedBlock blocks;
-        float x = center.x();
-        float y = center.y();
-        float z = center.z();
-        blocks[0] = block_to_hash_key(x, y, z);
-
-        float ex, ey, ez;
-        for (int i = 0; i < 6; ++i) {
-            ex = (i / 2 == 0) ? (i % 2 == 0 ? Block::size : -Block::size) : 0;
-            ey = (i / 2 == 1) ? (i % 2 == 0 ? Block::size : -Block::size) : 0;
-            ez = (i / 2 == 2) ? (i % 2 == 0 ? Block::size : -Block::size) : 0;
-            blocks[i + 1] = block_to_hash_key(ex + x, ey + y, ez + z);
+        BlockHashKey key = block_to_hash_key(center);
+        for (int i = 0; i < 27; ++i) {
+            blocks[i] = key + EXTENDED_OFFSETS[i];
         }
-
         return blocks;
     }
 
