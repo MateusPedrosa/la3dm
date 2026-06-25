@@ -228,6 +228,11 @@ add_executable(gpoctomap_server
     src/gpoctomap/gpoctomap_server.cpp
 )
 
+add_executable(pcd_recorder
+    ${COMMON_SOURCE_FILES}
+    src/common/pcd_recorder_node.cpp
+)
+
 ## Add cmake target dependencies of the executable/library
 ## as an example, message headers may need to be generated before nodes
 # add_dependencies(BGKOctoMap_node BGKOctoMap_generate_messages_cpp)
@@ -262,6 +267,10 @@ target_link_libraries(bgkoctomap_server
 )
 
 target_link_libraries(gpoctomap_server
+        ${catkin_LIBRARIES}
+)
+
+target_link_libraries(pcd_recorder
         ${catkin_LIBRARIES}
 )
 
