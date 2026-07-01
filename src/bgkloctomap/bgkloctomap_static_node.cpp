@@ -39,6 +39,9 @@ int main(int argc, char **argv) {
     float var_thresh = 1.0f;
     float prior_A = 1.0f;
     float prior_B = 1.0f;
+    bool enable_pruning = true;
+    double free_bbox_margin = 2.0;
+    std::string map_topic_alpha_beta("/alpha_beta_vis_array");
 
     nh.param<std::string>("dir", dir, dir);
     nh.param<std::string>("prefix", prefix, prefix);
@@ -60,6 +63,8 @@ int main(int argc, char **argv) {
     nh.param<float>("var_thresh", var_thresh, var_thresh);
     nh.param<float>("prior_A", prior_A, prior_A);
     nh.param<float>("prior_B", prior_B, prior_B);
+    nh.param<bool>("enable_pruning", enable_pruning, enable_pruning);
+    nh.param<double>("free_bbox_margin", free_bbox_margin, free_bbox_margin);
 
     ROS_INFO_STREAM("Parameters:" << std::endl <<
             "dir: " << dir << std::endl <<
@@ -84,6 +89,7 @@ int main(int argc, char **argv) {
             );
 
     la3dm::BGKLOctoMap map(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh, var_thresh, prior_A, prior_B);
+    map.set_enable_pruning(enable_pruning);
 
     ros::Time start = ros::Time::now();
     for (int scan_id = 1; scan_id <= scan_num; ++scan_id) {
@@ -131,39 +137,81 @@ int main(int argc, char **argv) {
     ///////// Publish Map /////////////////////
     la3dm::MarkerArrayPub m_pub(nh, map_topic, resolution);
     la3dm::MarkerArrayPub m_pub2(nh, map_topic2, resolution);
-    if (min_z == max_z) {
-        la3dm::point3f lim_min, lim_max;
-        map.get_bbox(lim_min, lim_max);
-        min_z = lim_min.z();
-        max_z = lim_max.z();
-    }
+    la3dm::MarkerArrayPub m_pub_alpha_beta(nh, map_topic_alpha_beta, resolution, {"occupied", "uncertain", "free"});
 
-     for (auto it = map.begin_leaf(); it != map.end_leaf(); ++it){
+    // Compute occupied-only bbox (get_bbox covers all blocks including free/unknown)
+    float occ_min_x =  1e9f, occ_min_y =  1e9f, occ_min_z =  1e9f;
+    float occ_max_x = -1e9f, occ_max_y = -1e9f, occ_max_z = -1e9f;
+    for (auto it = map.begin_leaf(); it != map.end_leaf(); ++it) {
+        if (it.get_node().get_state() != la3dm::State::OCCUPIED) continue;
         la3dm::point3f p = it.get_loc();
+        if (p.x() < occ_min_x) occ_min_x = p.x();
+        if (p.x() > occ_max_x) occ_max_x = p.x();
+        if (p.y() < occ_min_y) occ_min_y = p.y();
+        if (p.y() > occ_max_y) occ_max_y = p.y();
+        if (p.z() < occ_min_z) occ_min_z = p.z();
+        if (p.z() > occ_max_z) occ_max_z = p.z();
+    }
+    ROS_INFO_STREAM("Occupied cells bbox: ["
+        << occ_min_x << ", " << occ_max_x << "] x ["
+        << occ_min_y << ", " << occ_max_y << "] x ["
+        << occ_min_z << ", " << occ_max_z << "]");
 
-        if (it.get_node().get_state() == la3dm::State::OCCUPIED) {
+    if (min_z == max_z) {
+        min_z = occ_min_z;
+        max_z = occ_max_z;
+    }
+    float free_min_x = occ_min_x - (float)free_bbox_margin;
+    float free_max_x = occ_max_x + (float)free_bbox_margin;
+    float free_min_y = occ_min_y - (float)free_bbox_margin;
+    float free_max_y = occ_max_y + (float)free_bbox_margin;
+    float free_min_z = occ_min_z - (float)free_bbox_margin;
+    float free_max_z = occ_max_z + (float)free_bbox_margin;
+    ROS_INFO_STREAM("Free cells filter bbox (margin=" << free_bbox_margin << "): ["
+        << free_min_x << ", " << free_max_x << "] x ["
+        << free_min_y << ", " << free_max_y << "] x ["
+        << free_min_z << ", " << free_max_z << "]");
+
+    for (auto it = map.begin_leaf(); it != map.end_leaf(); ++it) {
+        la3dm::point3f p = it.get_loc();
+        auto state = it.get_node().get_state();
+
+        if (state == la3dm::State::OCCUPIED) {
+            float A = it.get_node().get_A();
+            float B = it.get_node().get_B();
             if (original_size) {
                 m_pub.insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size());
+                m_pub_alpha_beta.insert_point3d_color(p.x(), p.y(), p.z(), it.get_size(), A, B, 0.0f, 1.0f, "occupied");
             } else {
                 auto pruned = it.get_pruned_locs();
-                for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
+                for (auto n = pruned.cbegin(); n < pruned.cend(); ++n) {
                     m_pub.insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map.get_resolution());
+                    m_pub_alpha_beta.insert_point3d_color(n->x(), n->y(), n->z(), map.get_resolution(), A, B, 0.0f, 1.0f, "occupied");
+                }
             }
         }
-        else if (it.get_node().get_state() == la3dm::State::FREE) {
+        else if (state == la3dm::State::FREE &&
+                 p.x() >= free_min_x && p.x() <= free_max_x &&
+                 p.y() >= free_min_y && p.y() <= free_max_y &&
+                 p.z() >= free_min_z && p.z() <= free_max_z) {
+            float A = it.get_node().get_A();
+            float B = it.get_node().get_B();
             if (original_size) {
                 m_pub2.insert_point3d(p.x(), p.y(), p.z(), min_z, max_z, it.get_size(), it.get_node().get_prob());
+                m_pub_alpha_beta.insert_point3d_color(p.x(), p.y(), p.z(), it.get_size(), A, B, 0.0f, 1.0f, "free");
             } else {
                 auto pruned = it.get_pruned_locs();
-                for (auto n = pruned.cbegin(); n < pruned.cend(); ++n)
+                for (auto n = pruned.cbegin(); n < pruned.cend(); ++n) {
                     m_pub2.insert_point3d(n->x(), n->y(), n->z(), min_z, max_z, map.get_resolution(), it.get_node().get_prob());
+                    m_pub_alpha_beta.insert_point3d_color(n->x(), n->y(), n->z(), map.get_resolution(), A, B, 0.0f, 1.0f, "free");
+                }
             }
-            
         }
     }
 
     m_pub.publish();
     m_pub2.publish();
+    m_pub_alpha_beta.publish();
     ros::spin();
 
     return 0;

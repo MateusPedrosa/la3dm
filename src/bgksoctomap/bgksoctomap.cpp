@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <tuple>
+#include <unordered_set>
 #include <ros/ros.h>
 #include <pcl/filters/voxel_grid.h>
 #include <Eigen/Dense>
@@ -363,7 +365,10 @@ namespace la3dm {
                                     + 2.0f*inf[4]*n.y()*n.z();
                             }
                             float wv = valid_n ? node.compute_w_novelty(n_vec) : 1.0f;
-                            float wr = std::max(0.05f, 1.0f / (obs_range + 1.0f));
+                            float _rp1_dbg = obs_range + 1.0f;
+                            float wr = range_weight_quadratic_ ? 1.0f / (_rp1_dbg * _rp1_dbg)
+                                                               : 1.0f / _rp1_dbg;
+                            if (use_range_weight_floor_ && wr < range_weight_floor_) wr = range_weight_floor_;
                             ROS_INFO_STREAM("[dbg_voxel] "
                                 << "kbar=" << kbar[j] << " ybar=" << ybar[j]
                                 << " range=" << obs_range
@@ -383,8 +388,10 @@ namespace la3dm {
 
                             float w_voxel = node.compute_w_novelty(n_vec);  // pre-update
 
-                            float w_range = 1.0f / (obs_range + 1.0f);
-                            if (w_range < 0.05f) w_range = 0.05f;
+                            float _rp1 = obs_range + 1.0f;
+                            float w_range = range_weight_quadratic_ ? 1.0f / (_rp1 * _rp1)
+                                                                    : 1.0f / _rp1;
+                            if (use_range_weight_floor_ && w_range < range_weight_floor_) w_range = range_weight_floor_;
                             float w_total = w_range * w_voxel;
                             node.update_info_matrix(n_vec, w_total);
                             node.check_deallocation(los_hat);
@@ -639,8 +646,10 @@ namespace la3dm {
 
                             float w_voxel = node.compute_w_novelty(n_vec);  // pre-update
 
-                            float w_range = 1.0f / (obs_range + 1.0f);
-                            if (w_range < 0.05f) w_range = 0.05f;
+                            float _rp1 = obs_range + 1.0f;
+                            float w_range = range_weight_quadratic_ ? 1.0f / (_rp1 * _rp1)
+                                                                    : 1.0f / _rp1;
+                            if (use_range_weight_floor_ && w_range < range_weight_floor_) w_range = range_weight_floor_;
                             float w_total = w_range * w_voxel;
                             node.update_info_matrix(n_vec, w_total);
                             node.check_deallocation(los_hat);
@@ -691,10 +700,55 @@ namespace la3dm {
 
     void BGKSOctoMap::get_training_data(const PCLPointCloud &cloud, const point3f &origin, float ds_resolution,
                                       float free_resolution, float max_range, GPLineCloud &xy, GPLineCloud &rays, vector<int> &ray_idx) const {
-        PCLPointCloud sampled_hits;
-        downsample(cloud, sampled_hits, ds_resolution);
+        // Split by first-hit flag before downsampling so that non-first-hit
+        // points cannot dilute the averaged intensity below the 0.01 threshold.
+        PCLPointCloud first_hits_in, non_first_hits_in;
+        for (const auto &pt : cloud) {
+            if (pt.intensity > 0.01f) first_hits_in.push_back(pt);
+            else                      non_first_hits_in.push_back(pt);
+        }
 
-        // std::cout << "Sampled points: " << sampled_hits.size() << std::endl;
+        PCLPointCloud fh_ds, nfh_ds;
+        downsample(first_hits_in,     fh_ds,  ds_resolution);
+        downsample(non_first_hits_in, nfh_ds, ds_resolution);
+
+        // Build a set of voxel keys occupied by first-hit centroids so that
+        // redundant non-first-hit centroids in the same voxel can be dropped.
+        struct VoxelKey {
+            int ix, iy, iz;
+            bool operator==(const VoxelKey &o) const {
+                return ix == o.ix && iy == o.iy && iz == o.iz;
+            }
+        };
+        struct VoxelKeyHash {
+            size_t operator()(const VoxelKey &k) const {
+                size_t h = (size_t)(k.ix & 0xFFFFF);
+                h = h * 1000003 ^ (size_t)(k.iy & 0xFFFFF);
+                h = h * 1000003 ^ (size_t)(k.iz & 0xFFFFF);
+                return h;
+            }
+        };
+        auto to_key = [&](const PCLPointType &p) {
+            return VoxelKey{(int)std::floor(p.x / ds_resolution),
+                            (int)std::floor(p.y / ds_resolution),
+                            (int)std::floor(p.z / ds_resolution)};
+        };
+
+        std::unordered_set<VoxelKey, VoxelKeyHash> fh_keys;
+        fh_keys.reserve(fh_ds.size());
+        for (auto &pt : fh_ds) {
+            pt.intensity = 1.0f;
+            fh_keys.insert(to_key(pt));
+        }
+
+        PCLPointCloud sampled_hits;
+        sampled_hits += fh_ds;
+        for (auto &pt : nfh_ds) {
+            if (fh_keys.count(to_key(pt)) == 0) {
+                pt.intensity = 0.0f;
+                sampled_hits.push_back(pt);
+            }
+        }
 
         PCLPointCloud frees;
         frees.height = 1;
@@ -736,15 +790,7 @@ namespace la3dm {
             point3f occ_endpt(origin.x() + nx * l, origin.y() + ny * l, origin.z() + nz * l);
 
             if (!is_sentinel) {
-                // Hits closer than this get maximum evidence.
-                float baseline_range = 1.0f;
-                
-                // Scale peak weight by observation range
-                float peak_weight = baseline_range / (true_dist * true_dist);
-
-                // if (peak_weight < 0.05f) peak_weight = 0.05f; // minimum floor
-                
-                xy.emplace_back(point6f(occ_endpt), peak_weight);
+                xy.emplace_back(point6f(occ_endpt), 1.0f);
                 ray_idx.push_back(-1); // -1 tells the trainer this is an occupied point, not a ray
             }
 

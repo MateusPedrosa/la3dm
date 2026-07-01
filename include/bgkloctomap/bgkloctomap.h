@@ -13,7 +13,7 @@
 namespace la3dm {
 
     /// PCL PointCloud types as input
-    typedef pcl::PointXYZ PCLPointType;
+    typedef pcl::PointXYZI PCLPointType;
     typedef pcl::PointCloud<PCLPointType> PCLPointCloud;
 
     /*
@@ -73,6 +73,8 @@ namespace la3dm {
 
         /// Get block max depth.
         inline float get_block_depth() const { return block_depth; }
+
+        inline void set_enable_pruning(bool val) { enable_pruning = val; }
 
         /*
          * @brief Insert PCL PointCloud into BGKLOctoMaps.
@@ -377,6 +379,7 @@ namespace la3dm {
         float resolution;
         float block_size;
         unsigned short block_depth;
+        bool enable_pruning;
         std::unordered_map<BlockHashKey, Block *> block_arr;
         MyRTree rtree;
     };

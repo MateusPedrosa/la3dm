@@ -23,11 +23,13 @@ int main(int argc, char **argv) {
     std::string dir, prefix;
     int scan_num = 0;
     std::string map_topic("/occupied_cells_vis_array");
+    std::string map_topic_prob("/prob_vis_array");
     double max_range = -1, resolution = 0.1, ds_resolution = 0.1;
     double min_z = 0, max_z = 0;
     double occupied_thresh = 0.7;
     double prob_hit = 0.7, prob_miss = 0.4;
     double clamping_thres_min = 0.1192, clamping_thres_max = 0.971;
+    double free_bbox_margin = 2.0;
 
     nh.param<std::string>("dir", dir, dir);
     nh.param<std::string>("prefix", prefix, prefix);
@@ -42,6 +44,7 @@ int main(int argc, char **argv) {
     nh.param<double>("prob_miss", prob_miss, prob_miss);
     nh.param<double>("clamping_thres_min", clamping_thres_min, clamping_thres_min);
     nh.param<double>("clamping_thres_max", clamping_thres_max, clamping_thres_max);
+    nh.param<double>("free_bbox_margin", free_bbox_margin, free_bbox_margin);
 
     ROS_INFO_STREAM("Parameters:"
         << "\n  dir: " << dir
@@ -94,21 +97,56 @@ int main(int argc, char **argv) {
     ROS_INFO_STREAM("Mapping finished in " << (end - start).toSec() << "s");
 
     la3dm::MarkerArrayPub m_pub(nh, map_topic, (float)resolution);
-    if (min_z == max_z) {
-        double x_min, y_min, z_min, x_max, y_max, z_max;
-        tree.getMetricMin(x_min, y_min, z_min);
-        tree.getMetricMax(x_max, y_max, z_max);
-        min_z = z_min;
-        max_z = z_max;
+    la3dm::MarkerArrayPub m_pub_prob(nh, map_topic_prob, (float)resolution, {"occupied", "free"});
+
+    // Compute occupied-only bbox for free cell filtering
+    float occ_min_x =  1e9f, occ_min_y =  1e9f, occ_min_z =  1e9f;
+    float occ_max_x = -1e9f, occ_max_y = -1e9f, occ_max_z = -1e9f;
+    for (auto it = tree.begin_leafs(); it != tree.end_leafs(); ++it) {
+        if (!tree.isNodeOccupied(*it)) continue;
+        if (it.getX() < occ_min_x) occ_min_x = it.getX();
+        if (it.getX() > occ_max_x) occ_max_x = it.getX();
+        if (it.getY() < occ_min_y) occ_min_y = it.getY();
+        if (it.getY() > occ_max_y) occ_max_y = it.getY();
+        if (it.getZ() < occ_min_z) occ_min_z = it.getZ();
+        if (it.getZ() > occ_max_z) occ_max_z = it.getZ();
     }
+    ROS_INFO_STREAM("Occupied cells bbox: ["
+        << occ_min_x << ", " << occ_max_x << "] x ["
+        << occ_min_y << ", " << occ_max_y << "] x ["
+        << occ_min_z << ", " << occ_max_z << "]");
+
+    if (min_z == max_z) {
+        min_z = occ_min_z;
+        max_z = occ_max_z;
+    }
+    float free_min_x = occ_min_x - (float)free_bbox_margin;
+    float free_max_x = occ_max_x + (float)free_bbox_margin;
+    float free_min_y = occ_min_y - (float)free_bbox_margin;
+    float free_max_y = occ_max_y + (float)free_bbox_margin;
+    float free_min_z = occ_min_z - (float)free_bbox_margin;
+    float free_max_z = occ_max_z + (float)free_bbox_margin;
+    ROS_INFO_STREAM("Free cells filter bbox (margin=" << free_bbox_margin << "): ["
+        << free_min_x << ", " << free_max_x << "] x ["
+        << free_min_y << ", " << free_max_y << "] x ["
+        << free_min_z << ", " << free_max_z << "]");
 
     for (auto it = tree.begin_leafs(); it != tree.end_leafs(); ++it) {
+        float prob = (float)it->getOccupancy();
         if (tree.isNodeOccupied(*it)) {
             m_pub.insert_point3d(it.getX(), it.getY(), it.getZ(),
                                  (float)min_z, (float)max_z, (float)it.getSize());
+            m_pub_prob.insert_point3d_color(it.getX(), it.getY(), it.getZ(),
+                                            (float)it.getSize(), prob, 0.0f, 0.0f, 1.0f, "occupied");
+        } else if (it.getX() >= free_min_x && it.getX() <= free_max_x &&
+                   it.getY() >= free_min_y && it.getY() <= free_max_y &&
+                   it.getZ() >= free_min_z && it.getZ() <= free_max_z) {
+            m_pub_prob.insert_point3d_color(it.getX(), it.getY(), it.getZ(),
+                                            (float)it.getSize(), prob, 0.0f, 0.0f, 1.0f, "free");
         }
     }
     m_pub.publish();
+    m_pub_prob.publish();
     ros::spin();
     return 0;
 }

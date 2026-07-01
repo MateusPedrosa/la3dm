@@ -164,6 +164,16 @@ namespace la3dm {
         /// When true, Beta accumulates raw (unweighted) counts only.
         void set_ablate_directional_weights(bool v) { ablate_directional_weights_ = v; }
 
+        /// Configure the range weight decay mode and optional floor.
+        /// quadratic=false: w_range = 1/(r+1)  (linear decay)
+        /// quadratic=true:  w_range = 1/(r+1)² (quadratic decay, stronger suppression at range)
+        /// When enable_floor=true, w_range is clamped to [floor_val, 1] to avoid evidence starvation.
+        void set_range_weight_floor(bool enable_floor, float floor_val, bool quadratic = false) {
+            use_range_weight_floor_  = enable_floor;
+            range_weight_floor_      = floor_val;
+            range_weight_quadratic_  = quadratic;
+        }
+
         /// Debug: log every update to the voxel nearest (x,y,z) each scan.
         void set_debug_voxel(bool enabled, float x, float y, float z) {
             debug_voxel_enabled_ = enabled;
@@ -570,6 +580,11 @@ namespace la3dm {
 
         // ---- Ablation ----
         bool ablate_directional_weights_ = false;
+
+        // ---- Range weight mode ----
+        bool  use_range_weight_floor_  = true;
+        float range_weight_floor_      = 0.05f;
+        bool  range_weight_quadratic_  = false;   // false: 1/(r+1), true: 1/(r+1)²
 
         // ---- Per-voxel debug tracing ----
         bool  debug_voxel_enabled_ = false;

@@ -35,7 +35,7 @@ find_package(catkin REQUIRED COMPONENTS
 find_package(octomap REQUIRED)
 
 ## System dependencies are found with CMake's conventions
-# find_package(Boost REQUIRED COMPONENTS system)
+find_package(Boost REQUIRED COMPONENTS filesystem system)
 
 
 ## Uncomment this if the package has a setup.py. This macro ensures
@@ -308,6 +308,7 @@ target_link_libraries(gpoctomap_server
 
 target_link_libraries(pcd_recorder
         ${catkin_LIBRARIES}
+        ${Boost_LIBRARIES}
 )
 
 target_link_libraries(octomap_static_node

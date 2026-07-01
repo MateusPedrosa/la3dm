@@ -86,6 +86,11 @@ float pose_w_vz_l2             = 0.5f;
 // ---- Ablation flags ----
 bool  ablate_directional_weights = false;
 
+// ---- Range weight mode ----
+bool  use_range_weight_floor    = true;
+float range_weight_floor        = 0.05f;
+bool  range_weight_quadratic    = false;   // false: 1/(r+1), true: 1/(r+1)²
+
 // ---- Per-voxel debug tracing ----
 bool  debug_voxel_enable = false;
 float debug_voxel_x = 0.0f, debug_voxel_y = 0.0f, debug_voxel_z = 0.0f;
@@ -496,6 +501,11 @@ int main(int argc, char **argv) {
     // Ablation flags
     nh.param<bool>("ablate_directional_weights", ablate_directional_weights, ablate_directional_weights);
 
+    // Range weight mode
+    nh.param<bool> ("use_range_weight_floor",   use_range_weight_floor,   use_range_weight_floor);
+    nh.param<float>("range_weight_floor",        range_weight_floor,        range_weight_floor);
+    nh.param<bool> ("range_weight_quadratic",    range_weight_quadratic,    range_weight_quadratic);
+
     // Per-voxel debug tracing
     nh.param<bool> ("debug_voxel_enable", debug_voxel_enable, debug_voxel_enable);
     nh.param<float>("debug_voxel_x",      debug_voxel_x,      debug_voxel_x);
@@ -532,6 +542,9 @@ int main(int argc, char **argv) {
             "pose_history_size: " << pose_history_size << std::endl <<
             "pose_novelty_sigma: " << pose_novelty_sigma << std::endl <<
             "ablate_directional_weights: " << ablate_directional_weights << std::endl <<
+            "use_range_weight_floor: " << use_range_weight_floor << std::endl <<
+            "range_weight_floor: " << range_weight_floor << std::endl <<
+            "range_weight_quadratic: " << range_weight_quadratic << std::endl <<
             "tau_info: " << tau_info << std::endl <<
             "tau_var: "  << tau_var  << std::endl <<
             "delta: "    << delta
@@ -545,6 +558,7 @@ int main(int argc, char **argv) {
                                         pose_w_roll, pose_w_pitch, pose_w_yaw,
                                         pose_w_vx_l2, pose_w_vy_l2, pose_w_vz_l2);
     map->set_ablate_directional_weights(ablate_directional_weights);
+    map->set_range_weight_floor(use_range_weight_floor, range_weight_floor, range_weight_quadratic);
     map->set_debug_voxel(debug_voxel_enable, debug_voxel_x, debug_voxel_y, debug_voxel_z);
     la3dm::OcTreeNode::tau_info = tau_info;
     la3dm::OcTreeNode::tau_var  = tau_var;

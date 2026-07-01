@@ -30,6 +30,8 @@
     </node>
 
     <!--Start the LA3DM node -->
+    <arg name="free_bbox_margin" default="2.0"/>
+
     <node pkg="la3dm" type="$(arg method)_static_node" name="la3dm_static" output="screen">
 
         <param name="dir" value="$(arg dir)"/>
@@ -40,7 +42,9 @@
 
         <!-- Load dataset configuration from file -->
         <rosparam file="$(arg data_config)/$(arg dataset).yaml" command="load"/>
-        
+
+        <param name="free_bbox_margin" value="$(arg free_bbox_margin)"/>
+
     </node>
 
 </launch>

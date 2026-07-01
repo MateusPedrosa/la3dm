@@ -39,7 +39,8 @@ namespace la3dm {
                         float prior_A,
                         float prior_B)
             : resolution(resolution), block_depth(block_depth),
-              block_size((float) pow(2, block_depth - 1) * resolution) {
+              block_size((float) pow(2, block_depth - 1) * resolution),
+              enable_pruning(true) {
         Block::resolution = resolution;
         Block::size = this->block_size;
         Block::key_loc_map = init_key_loc_map(resolution, block_depth);
@@ -193,14 +194,15 @@ namespace la3dm {
 #endif
         for (int i = 0; i < test_blocks.size(); ++i) {
             BlockHashKey key = test_blocks[i];
+            Block *block;
 #ifdef OPENMP
 #pragma omp critical
 #endif
             {
                 if (block_arr.find(key) == block_arr.end())
                     block_arr.emplace(key, new Block(hash_key_to_block(key)));
+                block = block_arr[key];
             };
-            Block *block = block_arr[key];
             vector<float> xs;
             for (auto leaf_it = block->begin_leaf(); leaf_it != block->end_leaf(); ++leaf_it) {
                 point3f p = block->get_loc(leaf_it);
@@ -248,7 +250,8 @@ namespace la3dm {
             auto block = block_arr.find(key);
             if (block == block_arr.end())
                 continue;
-            block->second->prune();
+            if (enable_pruning)
+                block->second->prune();
         }
 #ifdef DEBUG
         Debug_Msg("Pruning done");
@@ -289,56 +292,59 @@ namespace la3dm {
 
         std::cout << "Sampled points: " << sampled_hits.size() << std::endl;
 
-        PCLPointCloud frees;
-        frees.height = 1;
-        frees.width = 0;
         rays.clear();
         ray_idx.clear();
         xy.clear();
-        int idx = 0;
         for (auto it = sampled_hits.begin(); it != sampled_hits.end(); ++it) {
             point3f p(it->x, it->y, it->z);
-            if (max_range > 0) {
-                double l = (p - origin).norm();
-                if (l > max_range)
-                    continue;
+
+            float true_dist = (float) sqrt((p.x() - origin.x()) * (p.x() - origin.x()) +
+                                           (p.y() - origin.y()) * (p.y() - origin.y()) +
+                                           (p.z() - origin.z()) * (p.z() - origin.z()));
+
+            bool is_sentinel = false;
+            float l = true_dist;
+
+            if (max_range > 0 && true_dist >= max_range) {
+                is_sentinel = true;
+                l = max_range;
             }
-            // point6f p6f(p);
-            // xy.emplace_back(p6f, 1.0f);
-            // ray_idx.push_back(-1);
 
-            float l = (float) sqrt((p.x() - origin.x()) * (p.x() - origin.x()) + (p.y() - origin.y()) * (p.y() - origin.y()) + (p.z() - origin.z()) * (p.z() - origin.z()));
+            bool is_first_hit = (it->intensity > 0.01f);
 
-            float nx = (p.x() - origin.x()) / l;
-            float ny = (p.y() - origin.y()) / l;
-            float nz = (p.z() - origin.z()) / l;
+            float nx = (p.x() - origin.x()) / true_dist;
+            float ny = (p.y() - origin.y()) / true_dist;
+            float nz = (p.z() - origin.z()) / true_dist;
 
             point3f occ_endpt(origin.x() + nx * l, origin.y() + ny * l, origin.z() + nz * l);
-            xy.emplace_back(point6f(occ_endpt), 1.0f);
-            ray_idx.push_back(-1);
 
-            // point3f free_endpt(origin.x() + nx * (l - free_resolution), origin.y() + ny * (l - free_resolution), origin.z() + nz * (l - 0.1f));
-            // point6f line6f(origin, free_endpt);
-            // rays.emplace_back(line6f, 0.0f);
-
-            PointCloud frees_n;
-            beam_sample(occ_endpt, origin, frees_n, free_resolution);
-
-            frees.push_back(PCLPointType(origin.x(), origin.y(), origin.z()));
-            xy.emplace_back(point6f(origin.x(), origin.y(), origin.z()), 0.0f);
-            ray_idx.push_back(idx);
-
-            for (auto p = frees_n.begin(); p != frees_n.end(); ++p) {
-                xy.emplace_back(point6f(p->x(), p->y(), p->z()), 0.0f);
-                ray_idx.push_back(idx);
+            if (!is_sentinel) {
+                xy.emplace_back(point6f(occ_endpt), 1.0f);
+                ray_idx.push_back(-1);
             }
-            l = l - free_resolution;
-            point3f free_endpt(origin.x() + nx * l, origin.y() + ny * l, origin.z() + nz * l);
-            point6f line6f(origin, free_endpt);
-            rays.emplace_back(line6f, 0.0f);
 
-            frees.clear();
-            ++idx;
+            if (is_first_hit || is_sentinel) {
+                float l_free = is_sentinel ? l : (l - free_resolution);
+
+                if (l_free > 0) {
+                    int current_ray_idx = rays.size();
+
+                    PointCloud frees_n;
+                    beam_sample(occ_endpt, origin, frees_n, free_resolution);
+
+                    xy.emplace_back(point6f(origin.x(), origin.y(), origin.z()), 0.0f);
+                    ray_idx.push_back(current_ray_idx);
+
+                    for (auto p_free = frees_n.begin(); p_free != frees_n.end(); ++p_free) {
+                        xy.emplace_back(point6f(p_free->x(), p_free->y(), p_free->z()), 0.0f);
+                        ray_idx.push_back(current_ray_idx);
+                    }
+
+                    point3f free_endpt(origin.x() + nx * l_free, origin.y() + ny * l_free, origin.z() + nz * l_free);
+                    point6f line6f(origin, free_endpt);
+                    rays.emplace_back(line6f, 0.0f);
+                }
+            }
         }
 
     }

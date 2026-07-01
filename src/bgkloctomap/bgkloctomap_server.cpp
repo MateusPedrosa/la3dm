@@ -40,6 +40,7 @@ bool original_size = true;
 float var_thresh = 1.0f;
 float prior_A = 1.0f;
 float prior_B = 1.0f;
+bool enable_pruning = true;
 
 void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
     
@@ -76,7 +77,7 @@ void cloudHandler(const sensor_msgs::PointCloud2ConstPtr &cloud) {
 
         //downsample for faster mapping
         la3dm::PCLPointCloud filtered_cloud;
-        pcl::VoxelGrid<pcl::PointXYZ> filterer;
+        pcl::VoxelGrid<la3dm::PCLPointType> filterer;
         filterer.setInputCloud(pcl_cloud);
         filterer.setLeafSize(ds_resolution, ds_resolution, ds_resolution);
         filterer.filter(filtered_cloud);
@@ -170,6 +171,7 @@ int main(int argc, char **argv) {
     nh.param<float>("var_thresh", var_thresh, var_thresh);
     nh.param<float>("prior_A", prior_A, prior_A);
     nh.param<float>("prior_B", prior_B, prior_B);
+    nh.param<bool>("enable_pruning", enable_pruning, enable_pruning);
 
     ROS_INFO_STREAM("Parameters:" << std::endl <<
             "topic: " << map_topic_occ << std::endl <<
@@ -191,6 +193,7 @@ int main(int argc, char **argv) {
             );
 
     map = new la3dm::BGKLOctoMap(resolution, block_depth, sf2, ell, free_thresh, occupied_thresh, var_thresh, prior_A, prior_B);
+    map->set_enable_pruning(enable_pruning);
     
     ros::Subscriber point_sub = nh.subscribe<sensor_msgs::PointCloud2>(cloud_topic, 1, cloudHandler);
     m_pub_occ = new la3dm::MarkerArrayPub(nh, map_topic_occ, resolution);

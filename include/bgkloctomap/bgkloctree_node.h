@@ -59,6 +59,9 @@ namespace la3dm {
         /// Get variance of occupancy (uncertainty)
         inline float get_var() const { return (m_A * m_B) / ( (m_A + m_B) * (m_A + m_B) * (m_A + m_B + 1.0f)); }
 
+        inline float get_A() const { return m_A; }
+        inline float get_B() const { return m_B; }
+
         /*
          * @brief Get occupancy state of the node.
          * @return occupancy state (see State).
